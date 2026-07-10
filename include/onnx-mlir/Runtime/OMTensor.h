@@ -33,8 +33,8 @@
 #include <malloc.h>
 #endif // #ifdef __APPLE__
 
-#include "onnx-mlir/Compiler/OMCompilerMacros.h"
-#include "onnx-mlir/Runtime/OnnxDataType.h"
+#include "../Compiler/OMCompilerMacros.h"
+#include "OnnxDataType.h"
 
 /* Typically, MemRefs in MLIR context are used as a compile-time constructs.
  * Information such as element type and rank of the data payload is statically

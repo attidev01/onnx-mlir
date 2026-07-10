@@ -20,3 +20,18 @@ add_onnx_mlir_executable(onnx-mlir-opt
   MLIROptLib
   MLIRSCFToOpenMP
   )
+
+if (TARGET OMGemminiAccel)
+  target_link_libraries(onnx-mlir-opt PRIVATE
+    OMGemminiAccel
+    OMGemminiCompilerUtils
+    OMGemminiOps
+    OMGemminiLowOps
+    OMONNXToGemmini
+    OMGemminiTiling
+    OMGemminiToGemminiLow
+    OMGemminiLowRewrite
+    OMGemminiLowToLLVM
+    OMGemminiSupport
+  )
+endif()

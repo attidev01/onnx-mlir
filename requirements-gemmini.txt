@@ -1,0 +1,16 @@
+# Gemmini backend system requirements.
+#
+# This file is intentionally descriptive rather than pip-installable: most
+# dependencies are system packages or source-built RISC-V tools.
+
+cmake >= 3.20
+make
+g++ with C++17 support
+python3 >= 3.8
+git
+device-tree-compiler
+riscv64-linux-gnu-gcc or riscv64-unknown-elf-gcc
+Spike riscv-isa-sim with Gemmini extension support
+riscv-pk proxy kernel
+libgemmini.so Spike extension
+Gemmini RoCC headers: gemmini.h and gemmini_params.h

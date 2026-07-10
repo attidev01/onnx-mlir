@@ -39,8 +39,20 @@ add_onnx_mlir_executable(onnx-mlir
   onnx-mlir.cpp
 
   LINK_LIBS PRIVATE
+  ${OMLibs}
+  OMCompilerPasses
+  OMInitAccelerators
+  OMGemminiAccel
+  OMKrnlToLLVM
   OMCompilerOptions
+  OMCompilerDialects
   OMCompilerUtils
   OMOptionUtils
+  MLIRArithTransforms
+  MLIRBufferizationTransforms
+  MLIRLinalgTransforms
+  MLIRTensorTransforms
+  MLIRLinalgTransforms
+  MLIRTensorTransforms
   )
   

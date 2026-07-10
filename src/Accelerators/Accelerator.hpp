@@ -24,7 +24,8 @@
 #include "include/onnx-mlir/Compiler/OMCompilerTypes.h"
 #include "src/Accelerators/Accelerators.inc"
 
-// TODO: Remove NNPA from this header
+// TODO: Remove accelerator-specific option headers from this common header.
+#include "src/Accelerators/Gemmini/Compiler/GemminiCompilerOptions.hpp"
 #include "src/Accelerators/NNPA/Compiler/NNPACompilerOptions.hpp"
 
 // Define the macros used to generate various accelerators artifacts (via the

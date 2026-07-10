@@ -64,14 +64,26 @@ Look [here](docs/Prerequisite.md) for help to set up the prerequisite software.
 
 At any point in time, ONNX-MLIR depends on a specific commit of the LLVM project that has been shown to work with the project.
 Periodically the maintainers need to move to a more recent LLVM level.
-Among other things, this requires to update the LLVM commit string in [clone-mlir.sh](utils/clone-mlir.sh).
-When updating ONNX-MLIR, it is good practice to check that the commit string of the MLIR/LLVM is the same as the one listed in that file. See instructions [here](docs/BuildONNX.md) when third-party ONNX also need to be updated.
+Among other things, this requires updating the LLVM commit string in [clone-mlir.sh](utils/clone-mlir.sh).
+Build instructions, including LLVM setup, ONNX updates, and Gemmini modes, are consolidated in [docs/BUILD.md](docs/BUILD.md).
 
 ### Build
 
-Directions to install MLIR and ONNX-MLIR are dependent on your OS.
-* [Linux or OSX](docs/BuildOnLinuxOSX.md).
-* [Windows](docs/BuildOnWindows.md).
+Start with the consolidated [build guide](docs/BUILD.md).
+Platform-specific legacy notes remain available for [Linux or OSX](docs/BuildOnLinuxOSX.md) and [Windows](docs/BuildOnWindows.md).
+
+For Gemmini development, use compile-only mode first:
+
+```shell
+scripts/check_prerequisites.sh --mode compile-only
+cmake -S . -B gemmini_toolchain_build \
+  -DONNX_MLIR_ENABLE_GEMMINI=ON \
+  -DONNX_MLIR_GEMMINI_MODE=compile-only \
+  -DONNX_MLIR_BUILD_TESTS=ON \
+  -DCMAKE_BUILD_TYPE=Release \
+  -G Ninja
+cmake --build gemmini_toolchain_build -j"$(nproc)"
+```
 
 After installation, an `onnx-mlir` executable should appear in the `build/Debug/bin` or `build/Release/bin` directory.
 
@@ -148,6 +160,9 @@ C/C++, Python, or Java interface.
 
 Documentation is provided in the `docs` sub-directory; the [DocumentList](docs/DocumentList.md) page provides an organized list of documents. Information is also provided on our public facing
 [onnx.ai/onnx-mlir](https://onnx.ai/onnx-mlir/) pages.
+
+Gemmini backend documentation is consolidated under [docs/gemmini](docs/gemmini/README.md),
+including build modes, validation, architecture, examples, testing, and troubleshooting.
 
 ## Contributing
 

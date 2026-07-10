@@ -7,6 +7,10 @@ add_custom_target(check-doc
     ${ONNX_MLIR_SRC_ROOT}
     --exclude_dirs
       third_party
+      .venv
+      llvm-project
+      gemmini/lib
+      gemmini_scala
       docs/doc_check/test
       docs/_site
   COMMAND ${check_cmd} ${CMAKE_BINARY_DIR}

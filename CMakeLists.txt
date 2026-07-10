@@ -12,6 +12,52 @@ option(ONNX_MLIR_ENABLE_WERROR "Enable warnings as errors." OFF)
 option(ONNX_MLIR_SUPPRESS_THIRD_PARTY_WARNINGS "Suppress warning in third_party code." ON)
 option(ONNX_MLIR_ENABLE_JAVA "Set to ON for building the Java runtime, tools, and tests" ON)
 option(ONNX_MLIR_ENABLE_PYRUNTIME_LIGHT "Set to ON for building Python driver of running the compiled model without llvm-project." OFF)
+option(ONNX_MLIR_ENABLE_GEMMINI "Enable the Gemmini accelerator backend." OFF)
+set(ONNX_MLIR_GEMMINI_MODE "compile-only" CACHE STRING
+  "Gemmini build mode: compile-only, hardware, or simulator.")
+set_property(CACHE ONNX_MLIR_GEMMINI_MODE PROPERTY STRINGS
+  compile-only hardware simulator)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+if (ONNX_MLIR_ENABLE_GEMMINI)
+  if (POLICY CMP0144)
+    cmake_policy(SET CMP0144 NEW)
+  endif()
+  find_package(Gemmini REQUIRED)
+  if (NOT ONNX_MLIR_GEMMINI_MODE MATCHES "^(compile-only|hardware|simulator)$")
+    message(FATAL_ERROR
+      "Invalid ONNX_MLIR_GEMMINI_MODE='${ONNX_MLIR_GEMMINI_MODE}'. "
+      "Expected one of: compile-only, hardware, simulator.")
+  endif()
+  if (ONNX_MLIR_GEMMINI_MODE STREQUAL "hardware" AND NOT GEMMINI_HAS_HARDWARE_TOOLCHAIN)
+    message(FATAL_ERROR
+      "Gemmini hardware mode requires Gemmini RoCC headers and a RISC-V GCC. "
+      "Set GEMMINI_ROOT to a Gemmini checkout and ensure riscv64-linux-gnu-gcc "
+      "or riscv64-unknown-elf-gcc is on PATH. Run scripts/check_prerequisites.sh "
+      "--mode hardware for details.")
+  endif()
+  if (ONNX_MLIR_GEMMINI_MODE STREQUAL "simulator" AND NOT GEMMINI_HAS_SIMULATOR)
+    message(FATAL_ERROR
+      "Gemmini simulator mode requires Gemmini RoCC headers, spike, pk, and "
+      "libgemmini.so. Run scripts/setup_gemmini_simulator.sh, export "
+      "RISCV_INSTALL, then run scripts/check_prerequisites.sh --mode simulator.")
+  endif()
+  message(STATUS "Gemmini mode             : ${ONNX_MLIR_GEMMINI_MODE}")
+  message(STATUS "Gemmini root             : ${GEMMINI_ROOT}")
+  message(STATUS "Gemmini RoCC headers     : ${GEMMINI_ROCC_INCLUDE_DIR}")
+  if (ONNX_MLIR_ACCELERATORS)
+    list(FIND ONNX_MLIR_ACCELERATORS "Gemmini" ONNX_MLIR_GEMMINI_ACCEL_INDEX)
+    if (ONNX_MLIR_GEMMINI_ACCEL_INDEX EQUAL -1)
+      list(APPEND ONNX_MLIR_ACCELERATORS Gemmini)
+      set(ONNX_MLIR_ACCELERATORS "${ONNX_MLIR_ACCELERATORS}" CACHE STRING
+        "Semicolon-separated list of accelerators to build." FORCE)
+    endif()
+  else()
+    set(ONNX_MLIR_ACCELERATORS "Gemmini" CACHE STRING
+      "Semicolon-separated list of accelerators to build." FORCE)
+  endif()
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -228,5 +274,7 @@ else()
   add_subdirectory(include)
   add_subdirectory(src)
   add_subdirectory(docs)
-  add_subdirectory(test)
+  if (ONNX_MLIR_BUILD_TESTS)
+    add_subdirectory(test)
+  endif()
 endif()

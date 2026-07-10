@@ -374,11 +374,9 @@ LogicalResult generateGenericLayerNormOpONNXCode(
     if (hasStaticShape(originType)) {
       meanOfX.setType(typeConverter->convertType(originType));
     }
-    Value pow2OfMeanOfX = create.onnx.mul(meanOfX, meanOfX);
-    Value XPow2 = create.onnx.mul(X, X);
-    Value meanOfXPow2 = create.onnx.reduceMean(reductionType, XPow2, axes);
-    var = create.onnx.sub(meanOfXPow2, pow2OfMeanOfX);
     d = create.onnx.sub(X, meanOfX);
+    Value dPow2 = create.onnx.mul(d, d);
+    var = create.onnx.reduceMean(reductionType, dPow2, axes);
   } else if constexpr (std::is_same<OP_TYPE,
                            ONNXRMSLayerNormalizationOp>::value) {
     // For RMS, just take X as the input minus mean.
@@ -393,7 +391,7 @@ LogicalResult generateGenericLayerNormOpONNXCode(
   if (hasStaticShape(originType)) {
     invStdDev.setType(typeConverter->convertType(originType));
   }
-  Value normalized = create.onnx.mul(d, invStdDev);
+  Value normalized = create.onnx.div(d, stdDev);
   Value Y = create.onnx.mul(normalized, lnOp.getScale());
   if (!isNoneValue(lnOp.getB())) {
     Y = create.onnx.add(Y, lnOp.getB());
@@ -779,56 +777,79 @@ struct GenericLayerNormaOpLowering : public OpConversionPattern<OP_TYPE> {
         [&](const onnx_mlir::AffineBuilderKrnlMem &ck, ValueRange loopInd) {
           MDBuilder create(ck);
           Value j = loopInd[0];
-          // load X, compute X**2, sum into reductions.
+          // Load X and sum into reductions. Traditional LayerNorm computes
+          // variance from squared deviations in a second pass to preserve the
+          // ONNX evaluation order; RMS LayerNorm can reduce X**2 directly.
           inlineFor(create, B, [&](int64_t d, Value o) {
             Value ii = create.math.add(i, o);
-            // Load X, compute X2.
             Value currX = create.vec.load(vecType, XMemRef, {ii, j});
-            Value currXSquare = create.math.mul(currX, currX);
-            // Perform reduction ov X values.
             if (isTraditionalLayerNorm) {
               Value currRed = create.vec.load(vecType, redMemRef, {o, zero});
               Value newRed = create.math.add(currRed, currX);
               create.vec.store(newRed, redMemRef, {o, zero});
+            } else {
+              Value currXSquare = create.math.mul(currX, currX);
+              Value currRed2 = create.vec.load(vecType, redMemRef2, {o, zero});
+              Value newRed2 = create.math.add(currRed2, currXSquare);
+              create.vec.store(newRed2, redMemRef2, {o, zero});
             }
-            // Perform reduction of X square values.
-            Value currRed2 = create.vec.load(vecType, redMemRef2, {o, zero});
-            Value newRed2 = create.math.add(currRed2, currXSquare);
-            create.vec.store(newRed2, redMemRef2, {o, zero});
           });
         });
 
-    // Sum across, compute mean, var, standard deviation and its inverse.
-    llvm::SmallVector<Value, 4> mean(B), invStdDev(B);
+    // Sum across and compute mean for traditional LayerNorm. For RMS
+    // LayerNorm, compute variance directly from the X**2 reduction.
+    llvm::SmallVector<Value, 4> mean(B), stdDev(B), invStdDev(B);
     Value redDimFloat = create.math.cast(elementType, redDim.getValue());
     Value oneFloat = create.math.constant(elementType, 1.0);
     inlineFor(create, B, [&](int64_t d, Value o) {
-      Value finalRed, finalRed2, currSum, currSum2, mean2, meanSquare, var;
-      // Load reductions.
-      if (isTraditionalLayerNorm)
+      if (isTraditionalLayerNorm) {
+        Value currSum;
+        Value finalRed;
         finalRed = create.vec.load(vecType, redMemRef, {o, zero});
-      finalRed2 = create.vec.load(vecType, redMemRef2, {o, zero});
-      // Horizontal reductions.
-      if (isTraditionalLayerNorm)
         currSum =
             create.vec.reduction(VectorBuilder::CombiningKind::ADD, finalRed);
-      currSum2 =
-          create.vec.reduction(VectorBuilder::CombiningKind::ADD, finalRed2);
-      // Compute means.
-      if (isTraditionalLayerNorm)
         mean[d] = create.math.div(currSum, redDimFloat);
-      mean2 = create.math.div(currSum2, redDimFloat);
-      // Compute standard deviation (with epsilon) and its inverse.
-      if (isTraditionalLayerNorm) {
-        meanSquare = create.math.mul(mean[d], mean[d]);
-        var = create.math.sub(mean2, meanSquare);
       } else {
-        var = mean2;
+        Value finalRed2 = create.vec.load(vecType, redMemRef2, {o, zero});
+        Value currSum2 = create.vec.reduction(
+            VectorBuilder::CombiningKind::ADD, finalRed2);
+        Value var = create.math.div(currSum2, redDimFloat);
+        Value varEps = create.math.add(var, epsilon);
+        stdDev[d] = create.math.sqrt(varEps);
+        invStdDev[d] = create.math.div(oneFloat, stdDev[d]);
       }
-      Value varEps = create.math.add(var, epsilon);
-      Value stdDev = create.math.sqrt(varEps);
-      invStdDev[d] = create.math.div(oneFloat, stdDev);
     });
+
+    if (isTraditionalLayerNorm) {
+      // Now that the mean is known, reduce squared deviations exactly as ONNX
+      // specifies: variance = E[(x - E[x])**2].
+      create.affineKMem.forLoopIE(izero, redDim, totVL,
+          [&](const onnx_mlir::AffineBuilderKrnlMem &ck, ValueRange loopInd) {
+            MDBuilder create(ck);
+            Value j = loopInd[0];
+            inlineFor(create, B, [&](int64_t d, Value o) {
+              Value ii = create.math.add(i, o);
+              Value currX = create.vec.load(vecType, XMemRef, {ii, j});
+              Value meanSplat = create.vec.broadcast(vecType, mean[d]);
+              Value XMinusMean = create.math.sub(currX, meanSplat);
+              Value XMinusMeanSquare =
+                  create.math.mul(XMinusMean, XMinusMean);
+              Value currRed2 = create.vec.load(vecType, redMemRef2, {o, zero});
+              Value newRed2 = create.math.add(currRed2, XMinusMeanSquare);
+              create.vec.store(newRed2, redMemRef2, {o, zero});
+            });
+          });
+
+      inlineFor(create, B, [&](int64_t d, Value o) {
+        Value finalRed2 = create.vec.load(vecType, redMemRef2, {o, zero});
+        Value currSum2 = create.vec.reduction(
+            VectorBuilder::CombiningKind::ADD, finalRed2);
+        Value var = create.math.div(currSum2, redDimFloat);
+        Value varEps = create.math.add(var, epsilon);
+        stdDev[d] = create.math.sqrt(varEps);
+        invStdDev[d] = create.math.div(oneFloat, stdDev[d]);
+      });
+    }
     // Normalize of entire vectors.
     create.affineKMem.forLoopIE(izero, redDim, totVL,
         [&](const onnx_mlir::AffineBuilderKrnlMem &ck, ValueRange loopInd) {
@@ -846,8 +867,15 @@ struct GenericLayerNormaOpLowering : public OpConversionPattern<OP_TYPE> {
             } else {
               XMinusMean = currX;
             }
-            Value invStdDevSplat = create.vec.broadcast(vecType, invStdDev[d]);
-            Value normalizedX = create.math.mul(XMinusMean, invStdDevSplat);
+            Value normalizedX;
+            if (isTraditionalLayerNorm) {
+              Value stdDevSplat = create.vec.broadcast(vecType, stdDev[d]);
+              normalizedX = create.math.div(XMinusMean, stdDevSplat);
+            } else {
+              Value invStdDevSplat =
+                  create.vec.broadcast(vecType, invStdDev[d]);
+              normalizedX = create.math.mul(XMinusMean, invStdDevSplat);
+            }
             // Process with multiplying by scale (scalar or 1D vector).
             Value scale = getScalarWithBroadcast(create, vecType, scaleMemRef,
                 zero, ii, j, scaleBroadcastKind, scaleModFactor);

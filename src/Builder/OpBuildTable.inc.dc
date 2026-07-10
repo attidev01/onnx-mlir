@@ -1,0 +1,1 @@
+file-same-as-stdout({"file": "/home/lahcen/toolchains/onnx-mlir-xcompile/onnx-mlir/src/Builder/OpBuildTable.inc", "cmd": ["/usr/bin/python3.12", "/home/lahcen/toolchains/onnx-mlir-xcompile/onnx-mlir/utils/gen_onnx_mlir.py", "--dry-run-op-build-table"]})

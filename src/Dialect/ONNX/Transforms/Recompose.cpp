@@ -913,7 +913,9 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeGeluFromMulPattern>(context);
-  patterns.insert<RecomposeLayerNormFromMulPattern>(context);
+  // Preserve decomposed LayerNorm graphs. The recomposed ONNXLayerNormalization
+  // lowering changes fp32 evaluation enough for BERT-style transformer models
+  // to miss tight ONNX Runtime validation tolerances.
   patterns.insert<RecomposeQLinearMatMulFromQuantizeLinearPattern>(context);
   patterns.insert<CombineParallelConv2DPattern>(context);
 }

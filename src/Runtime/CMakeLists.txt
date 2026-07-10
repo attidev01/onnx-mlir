@@ -3,7 +3,7 @@
 
 if (NOT ONNX_MLIR_ENABLE_PYRUNTIME_LIGHT)
 add_subdirectory(jni)
-add_subdirectory(omp)
+#add_subdirectory(omp)
 endif()
 add_subdirectory(python)
 

@@ -188,3 +188,42 @@ dmypy.json
 .vscode
 .devcontainer
 .vs
+
+# ONNX-MLIR/Gemmini generated artifacts
+CMakeCache.txt
+CMakeFiles/
+CMakeScratch/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+/docs/**/Makefile
+/include/**/Makefile
+/src/**/Makefile
+
+# Gemmini dev workspace (untracked, not part of onnx-mlir proper)
+gemmini/
+gemmini_scala/
+Gemmini_Docs/
+models/
+
+# Local build trees and generated outputs
+gemmini_toolchain_build/
+llvm-project/build-x86/
+build_rv64/
+build_test/
+test/accelerators/gemmini/integration/Output/
+test/accelerators/gemmini/.lit_test_times.txt
+
+# Gemmini runtime/test build products
+rt_obj/
+gem_rt_obj/
+onnx_obj/
+gem_obj/
+*.tmp
+*.tmp.dir/
+spike_output.json
+zoo_report.json
+output.txt
+
+# Local editor/workspace files
+*.code-workspace

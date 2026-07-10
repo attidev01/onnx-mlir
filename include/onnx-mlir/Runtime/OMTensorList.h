@@ -16,7 +16,7 @@
 #ifndef ONNX_MLIR_OMTENSORLIST_H
 #define ONNX_MLIR_OMTENSORLIST_H
 
-#include "onnx-mlir/Runtime/OMTensor.h"
+#include "OMTensor.h"
 
 struct OMTensorList;
 

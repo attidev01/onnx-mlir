@@ -43,6 +43,8 @@ def main(root_dir, exclude_dirs):
 
     ctx = DocCheckerCtx(root_dir)
     for doc_file in chain(Path(root_dir).rglob("*.md"), Path(root_dir).rglob("*.dc")):
+        if not doc_file.is_file():
+            continue
         doc_file = os.path.normpath(doc_file)
         # Skip, if doc file is in directories to be excluded.
         if any([str(doc_file).startswith(exclude_dir) for exclude_dir in exclude_dirs]):

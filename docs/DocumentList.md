@@ -9,6 +9,7 @@ This document serves as an index for onnx-mlir documents.
 
 # Working environment
 * Installation is covered by [README.md](../README.md).
+* Consolidated build instructions are covered by [BUILD.md](BUILD.md).
 * [Workflow.md](Workflow.md) describes how to contribute in github environment.
 * [This guideline](Documentation.md) is used to keep documentation and code consistent.
 * [UpdatingLLVMCommit.md](UpdatingLLVMCommit.md) describes how to update the commit of LLVM that ONNX-MLIR depends on.
@@ -26,6 +27,7 @@ at the ONNX operand level.
 * All the passes may be controlled with [options](Options.md).
 * How to handle errors can be found [here](ErrorHandling.md).
 * How to support a new accelerator can be found [here](AddCustomAccelerators.md).
+* Gemmini accelerator documentation is consolidated in [gemmini/README.md](gemmini/README.md).
 * How to analyze unknown dimensions and query their equality at compile time can be found [here](DynamicDimensionAnalysis.md).
 * A Jenkins monitor job was setup to help with updating LLVM commit. It locates the next commit we can update to without breaking ONNX-MLIR, as well as the commit that will break ONNX-MLIR. You can see the commit(s) here: [s390x](https://www.onnxmlir.xyz/jenkins/job/LLVM-Watch-Docker-Build/LLVM_20Watch_20Report/), [ppc64le](https://www.onnxmlir.xyz/jenkinp/job/LLVM-Watch-Docker-Build/LLVM_20Watch_20Report/), [amd64](https://www.onnxmlir.xyz/jenkinx/job/LLVM-Watch-Docker-Build/LLVM_20Watch_20Report/).
 

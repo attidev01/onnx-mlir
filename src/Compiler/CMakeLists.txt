@@ -70,6 +70,8 @@ add_onnx_mlir_library(OMCompilerDialects
   OMKrnlOps
   OMONNXOps
   MLIRIR
+  MLIRLinalgTransforms
+  MLIRTensorTransforms
   MLIROpenMPToLLVMIRTranslation
   )
 
@@ -207,9 +209,9 @@ add_onnx_mlir_library(OMCompilerUtils
 # CompilerUtils does not require cruntime or jniruntime to build,
 # however, they are required for execution when using the EmitLib or EmitJNI
 # options
-add_dependencies(OMCompilerUtils cruntime)
+#add_dependencies(OMCompilerUtils cruntime)
 if (ONNX_MLIR_ENABLE_JNI)
-  add_dependencies(OMCompilerUtils jniruntime)
+  #add_dependencies(OMCompilerUtils jniruntime)
 endif()
 
 # Find OpenMP headers built by LLVM
@@ -220,7 +222,7 @@ find_path(OPENMP_INCLUDE_DIR
   NO_DEFAULT_PATH
 )
 if(OPENMP_INCLUDE_DIR)
-  add_dependencies(OMCompilerUtils ompruntime)
+#  #add_dependencies(OMCompilerUtils )
 endif()
 
 add_onnx_mlir_library(OMCompiler

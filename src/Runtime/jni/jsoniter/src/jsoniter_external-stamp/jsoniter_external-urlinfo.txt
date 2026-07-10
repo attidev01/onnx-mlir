@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=/home/lahcen/cmake-3.28.1/bin/cmake;-P;/home/lahcen/toolchains/onnx-mlir-xcompile/onnx-mlir/src/Runtime/jni/jsoniter/src/jsoniter_external-stamp/download-jsoniter_external.cmake;COMMAND;/home/lahcen/cmake-3.28.1/bin/cmake;-P;/home/lahcen/toolchains/onnx-mlir-xcompile/onnx-mlir/src/Runtime/jni/jsoniter/src/jsoniter_external-stamp/verify-jsoniter_external.cmake
+source_dir=/home/lahcen/toolchains/onnx-mlir-xcompile/onnx-mlir/src/Runtime/jni/jsoniter/src/jsoniter_external
+work_dir=/home/lahcen/toolchains/onnx-mlir-xcompile/onnx-mlir/src/Runtime/jni/jsoniter/src
+url(s)=https://repo1.maven.org/maven2/com/jsoniter/jsoniter/0.9.23/jsoniter-0.9.23.jar
+hash=SHA1=4cff9a02d6d9a848d1b7298aac36c47fd9e67d77
+no_extract=true
+
