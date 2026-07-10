@@ -37,7 +37,7 @@ So ONNX-MLIR does not directly emit these raw Gemmini instruction macros in its 
 Instead, the current backend flow is:
 
 - match and legalize ONNX ops in `src/Accelerators/Gemmini/Conversion/ONNXToGemmini/`
-- call runtime functions from `src/Accelerators/Gemmini/Runtime/OMRuntimeGemmini.c`
+- call runtime functions from `src/Accelerators/Gemmini/Runtime/OMRuntimeGemmini.cpp`
 - use `gemmini.h` helper functions
 - let those helpers issue the final Gemmini instruction macros
 

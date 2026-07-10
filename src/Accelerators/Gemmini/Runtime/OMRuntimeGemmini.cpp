@@ -74,6 +74,8 @@
 #error "OMRuntimeGemmini.cpp must only be compiled for RISC-V targets"
 #endif
 
+// Resolved from GEMMINI_ROCC_INCLUDE_DIR.  The bundled ABI tree also provides
+// a forwarding header so editors can resolve this include before CMake runs.
 #include "gemmini.h"
 
 // ===--- Helpers ---===

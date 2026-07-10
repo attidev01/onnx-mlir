@@ -1,6 +1,9 @@
 #ifndef GEMMINI_NN_H
 #define GEMMINI_NN_H
 
+// This upstream Gemmini helper is C-only: several entry points use GNU C
+// variable-length array parameters and should be checked with a C compiler.
+
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -573,4 +576,3 @@ void pool_with_col2im(size_t I, size_t J,
 }
 
 #endif // GEMMINI_NN_H
-
