@@ -1,18 +1,21 @@
 # Gemmini Hardware ABI Headers
 
-This directory vendors the minimal Gemmini hardware ABI headers needed by the
+This directory vendors the Gemmini hardware ABI headers needed by the
 ONNX-MLIR Gemmini runtime. It is intentionally not a full copy of
-`gemmini-rocc-tests`.
+`gemmini-rocc-tests`, but it is self-contained for the runtime build.
 
-The most important file is:
+The most important files are:
 
 ```text
+include/gemmini.h
 include/gemmini_params.h
+rocc-software/src/xcustom.h
 ```
 
-That header defines the hardware configuration used when compiling the runtime:
-array dimension, scratchpad shape, accumulator shape, element types, scaling
-types, and enabled Gemmini features.
+`include/gemmini.h` defines the Gemmini software API used by the runtime.
+`include/gemmini_params.h` defines the hardware configuration used when
+compiling the runtime: array dimension, scratchpad shape, accumulator shape,
+element types, scaling types, and enabled Gemmini features.
 
 The runtime includes:
 
