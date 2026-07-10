@@ -1,0 +1,1427 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{setspace}
+\usepackage{microtype}
+\usepackage{verbatim}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage[bottom]{footmisc}
+
+\geometry{a4paper, margin=1in, headheight=14.5pt, footskip=30pt, textheight=24cm}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codeblue}{rgb}{0,0,0.95}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+\definecolor{headerblue}{rgb}{0.0,0.3,0.6}
+\definecolor{footerblue}{rgb}{0.2,0.4,0.7}
+\definecolor{warningbg}{rgb}{1.0,0.95,0.9}
+\definecolor{passgreen}{rgb}{0.0,0.6,0.0}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{codeblue}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codegreen},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single,
+    frameround=tttt
+}
+
+\lstdefinestyle{outputstyle}{
+    backgroundcolor=\color{backcolour},
+    basicstyle=\ttfamily\footnotesize\color{codegray},
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=none,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single,
+    frameround=tttt
+}
+
+\lstset{style=mystyle}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{headerblue}{\textbf{SiliconeSignal Technologies}}}
+\fancyhead[R]{\textcolor{headerblue}{\textbf{Gemmini Backend Reference Manual}}}
+\fancyfoot[L]{\textcolor{footerblue}{\small Meknes, Morocco}}
+\fancyfoot[C]{\thepage}
+\fancyfoot[R]{\textcolor{footerblue}{\small Version 3.1}}
+
+\titleformat{\section}
+    {\normalfont\Large\bfseries\color{headerblue}}
+    {\thesection}{1em}{}
+
+\titleformat{\subsection}
+    {\normalfont\large\bfseries\color{headerblue}}
+    {\thesubsection}{1em}{}
+
+\titleformat{\subsubsection}
+    {\normalfont\bfseries\color{headerblue}}
+    {\thesubsubsection}{1em}{}
+
+\newenvironment{definition}[2][Definition]{
+    \begin{center}
+    \begin{tabular}{|p{0.95\textwidth}|}
+    \hline
+    \textbf{#1: #2} \\
+    \hline
+    \begin{minipage}{0.93\textwidth}
+}{
+    \end{minipage} \\
+    \hline
+    \end{tabular}
+    \end{center}
+}
+
+\newenvironment{notebox}[1][Note]{
+    \begin{center}
+    \begin{tabular}{|p{0.95\textwidth}|}
+    \hline
+    \textbf{#1} \\
+    \hline
+    \begin{minipage}{0.93\textwidth}
+}{
+    \end{minipage} \\
+    \hline
+    \end{tabular}
+    \end{center}
+}
+
+\newenvironment{warningbox}[1][Warning]{
+    \begin{center}
+    \begin{tabular}{|p{0.95\textwidth}|}
+    \hline
+    \textcolor{red}{\textbf{#1}} \\
+    \hline
+    \begin{minipage}{0.93\textwidth}
+}{
+    \end{minipage} \\
+    \hline
+    \end{tabular}
+    \end{center}
+}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\gemmini}{\textsc{Gemmini}}
+\newcommand{\onnxmlir}{\texttt{ONNX-MLIR}}
+
+\title{
+    \vspace{2cm}
+    {\Huge\bfseries\color{headerblue}Gemmini Accelerator Backend} \\
+    {\Large Reference Manual} \\
+    \vspace{0.5cm}
+    {\large ONNX-MLIR Integration \& Implementation Guide} \\
+    \vspace{1cm}
+    {\large Version 3.1 (Corrected)}
+}
+\author{\textbf{SST Team}}
+\date{}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+\newpage
+
+\section*{Document Control}
+
+\begin{tabular}{|p{0.25\textwidth}|p{0.7\textwidth}|}
+\hline
+\textbf{Document ID} & SST-GEMMINI-RM-008 \\
+\hline
+\textbf{Version} & 3.1 \\
+\hline
+\textbf{Status} & Final \\
+\hline
+\textbf{Classification} & Technical Reference \\
+\hline
+\textbf{Author} & SST Team \\
+\hline
+\textbf{Last Updated} & \today \\
+\hline
+\textbf{Approval} & Pending \\
+\hline
+\end{tabular}
+
+\vspace{1cm}
+
+\noindent\textbf{Abstract:} This reference manual provides comprehensive documentation for the Gemmini accelerator backend within the ONNX-MLIR compiler framework. The backend enables ONNX models to target the Gemmini systolic array accelerator on RISC-V platforms. As of June 2026, the backend passes 41/41 MLIR lit tests, 18/18 integration tests, 22/22 example tests, and 9/9 model zoo models. This document covers architecture, compiler passes, MLIR dialects, runtime library, build configuration, testing infrastructure, validation results, usage examples, and troubleshooting.
+
+\newpage
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+
+\subsection{Document Purpose and Scope}
+
+This reference manual serves as the authoritative guide for developers, researchers, and system architects working with the Gemmini accelerator backend in ONNX-MLIR. It documents the complete implementation, from high-level architecture to low-level runtime details.
+
+\subsection{Core Definitions}
+
+\begin{definition}{Gemmini}
+Gemmini is an open-source, configurable systolic array generator developed by UC Berkeley. It produces RISC-V RoCC (RISC-V Custom Coprocessor) accelerators for dense linear algebra operations, particularly matrix multiplication and convolution. The generator is written in Chisel and produces synthesizable Verilog for FPGA or ASIC implementations.
+
+\textbf{Key properties:}
+\begin{itemize}[leftmargin=*]
+    \item Configurable systolic array dimensions (default 16x16)
+    \item Support for weight-stationary (WS) and output-stationary (OS) dataflows
+    \item Software-managed scratchpad memory
+    \item DMA engine for data movement
+    \item Optional activation functions (ReLU, ReLU6)
+\end{itemize}
+\end{definition}
+
+\begin{definition}{Systolic Array}
+A systolic array is a homogeneous network of processing elements (PEs) that rhythmically compute and pass data through the network. Gemmini's default configuration uses a 16x16 systolic array where each PE performs a multiply-accumulate (MAC) operation every cycle.
+
+\textbf{Characteristics:}
+\begin{itemize}[leftmargin=*]
+    \item Data flows through the array in a rhythmic, pipelined fashion
+    \item Each PE communicates only with its nearest neighbors
+    \item Reduces memory bandwidth requirements by reusing data
+    \item Achieves high throughput for matrix multiplication
+\end{itemize}
+\end{definition}
+
+\begin{definition}{RoCC (RISC-V Custom Coprocessor)}
+RoCC is a RISC-V extension that defines a standard interface for attaching custom coprocessors. Gemmini is implemented as a RoCC accelerator using the RoCC port of a Rocket or BOOM tile.
+
+\textbf{Instruction format:}
+\begin{lstlisting}[language=C]
+.insn r CUSTOM_3, 0x3, funct7, x0, rs1, rs2
+\end{lstlisting}
+\end{definition}
+
+\begin{definition}{Scratchpad Memory}
+Software-managed on-chip SRAM, distinct from hardware-managed caches. Gemmini's scratchpad has 16,384 rows x 16 bytes per row (256 KB total) organized in 4 banks for parallel access. This is 16x larger than the stub values used in early development.
+\end{definition}
+
+\begin{definition}{Double Buffering (Ping-Pong)}
+A technique that uses two memory buffers to overlap data transfer with computation. While the systolic array computes on one buffer, DMA loads the next tile into the other buffer. The slot offsets are expressed as relative row ranges within the 16,384-row address space.
+\end{definition}
+
+\begin{definition}{Spike Simulator}
+The official RISC-V ISA simulator. With the --extension=gemmini flag, Spike loads a shared library (libgemmini.so) that emulates Gemmini RoCC instructions.
+\end{definition}
+
+\begin{definition}{ONNX-MLIR}
+An open-source compiler that translates ONNX (Open Neural Network Exchange) models into MLIR (Multi-Level Intermediate Representation) and then to LLVM IR, ultimately producing executable binaries for various targets including RISC-V.
+\end{definition}
+
+\subsection{Current Status Summary}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.4\textwidth}|p{0.2\textwidth}|p{0.3\textwidth}|}
+\hline
+\textbf{Test Suite} & \textbf{Count} & \textbf{Status} \\
+\hline
+MLIR lit tests & 41 & \textcolor{passgreen}{41/41 PASS} \\
+\hline
+Integration tests & 18 & \textcolor{passgreen}{18/18 PASS} \\
+\hline
+Example tests & 22 & \textcolor{passgreen}{22/22 PASS} \\
+\hline
+Model zoo & 9 & \textcolor{passgreen}{9/9 PASS} \\
+\hline
+Numerical correctness (Spike) & 3 models & \textcolor{passgreen}{PASS at 1e-5} \\
+\hline
+\end{tabular}
+\caption{Current Validation Status}
+\end{table}
+
+\section{Quick Start Guide (5 Minutes)}
+
+\subsection{Step 1: Check Prerequisites}
+
+\begin{lstlisting}[language=bash]
+scripts/check_prerequisites.sh --mode compile-only
+\end{lstlisting}
+
+\subsection{Step 2: Build the Compiler}
+
+\begin{lstlisting}[language=bash]
+cmake -S . -B gemmini_toolchain_build -DONNX_MLIR_ENABLE_GEMMINI=ON -DONNX_MLIR_GEMMINI_MODE=compile-only -DCMAKE_BUILD_TYPE=Release
+cmake --build gemmini_toolchain_build -j$(nproc) --target onnx-mlir
+\end{lstlisting}
+
+\subsection{Step 3: Compile ResNet-18}
+
+\begin{lstlisting}[language=bash]
+ONNX_MLIR=gemmini_toolchain_build/Release/bin/onnx-mlir
+$ONNX_MLIR --maccel=Gemmini --EmitMLIR resnet18-v1-7.onnx -o /tmp/resnet18_gemmini
+\end{lstlisting}
+
+\subsection{Step 4: Count Gemmini Calls}
+
+\begin{lstlisting}[language=bash]
+grep -c 'om_gemmini_' /tmp/resnet18_gemmini.onnx.mlir
+\end{lstlisting}
+
+\begin{lstlisting}[style=outputstyle]
+21
+\end{lstlisting}
+
+\subsection{Step 5: Run on Spike (Simulator Mode)}
+
+\begin{lstlisting}[language=bash]
+RISCV_INSTALL="$HOME/riscv-gemmini" scripts/setup_gemmini_simulator.sh --install
+cmake -S . -B gemmini_toolchain_build_sim -DONNX_MLIR_ENABLE_GEMMINI=ON -DONNX_MLIR_GEMMINI_MODE=simulator -DRISCV_INSTALL="$HOME/riscv-gemmini"
+cmake --build gemmini_toolchain_build_sim -j$(nproc)
+$ONNX_MLIR --maccel=Gemmini --mtriple=riscv64-unknown-linux-gnu resnet18-v1-7.onnx -o resnet18_rv64
+spike --extension=gemmini --isa=rv64imafdc "$HOME/riscv-gemmini/bin/pk" ./resnet18_rv64
+\end{lstlisting}
+
+\subsection{Expected Output}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.4\textwidth}|p{0.55\textwidth}|}
+\hline
+\textbf{Item} & \textbf{Expected Value} \\
+\hline
+Gemmini runtime calls & 21 (20 om\_gemmini\_conv\_f32 + 1 om\_gemmini\_gemm\_f32\_bias) \\
+\hline
+MLIR lit tests pass rate & 41/41 (100\%) \\
+\hline
+Integration tests pass rate & 18/18 (100\%) \\
+\hline
+\end{tabular}
+\caption{Expected Quick Start Results}
+\end{table}
+
+\section{Architecture Overview}
+
+\subsection{Compilation Pipeline}
+
+\begin{verbatim}
+ONNX Model (.onnx)
+       |
+       v
+ONNX Dialect
+       |
+       v
+ONNXToGemmini Pass (benefit=10)
+       |
+   +---+---+
+   |       |
+   v       v
+Gemmini   krnl.call
+Dialect   (Runtime Delegate)
+   |
+   v
+GemminiTiling
+   |
+   v
+GemminiToGemminiLow
+   |
+   v
+GemminiLowRewrite
+   |
+   v
+GemminiLowToLLVM
+   |
+   v
+LLVM Dialect -> RISC-V Binary
+\end{verbatim}
+
+\subsection{Two Execution Paths}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.25\textwidth}|p{0.35\textwidth}|p{0.35\textwidth}|}
+\hline
+\textbf{Aspect} & \textbf{Runtime Delegate Path} & \textbf{Direct RoCC Path} \\
+\hline
+Primary ops & Conv, Gemm, MatMul f32, Resize, Pad, Concat, Slice, Transpose, Split, Sigmoid, Mul, Relu, BN, Pooling, Softmax & MatMul int8/i32 \\
+\hline
+Lowering & krnl.call @om\_gemmini\_* & gemmini\_low.* to CUSTOM\_3 asm \\
+\hline
+Hardware use & Quantize f32 to int8, call tiled\_matmul\_auto, dequantize & Direct RoCC instructions \\
+\hline
+Benefit & 10 (wins over standard path) & 11 (highest priority) \\
+\hline
+\end{tabular}
+\caption{Two Execution Paths Comparison}
+\end{table}
+
+\subsection{Hardware Parameters}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.35\textwidth}|p{0.25\textwidth}|p{0.35\textwidth}|}
+\hline
+\textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
+\hline
+Systolic array dimension & DIM = 16 & 16x16 processing elements \\
+\hline
+Scratchpad banks & 4 & Independent memory banks \\
+\hline
+Scratchpad rows & 16,384 & Total addressable rows (256 KB) \\
+\hline
+Accumulator rows & 1,024 & Accumulator buffer rows (64 KB) \\
+\hline
+Element type & int8 & Input element type \\
+\hline
+Accumulator type & int32 & Accumulator element type \\
+\hline
+RoCC channel & XCUSTOM\_ACC = 3 & CUSTOM\_3 opcode (0x7b) \\
+\hline
+Dataflow mode & Weight-Stationary (WS) & Gemmini architecture \\
+\hline
+\end{tabular}
+\caption{Gemmini Hardware Parameters}
+\end{table}
+
+\section{Compiler Pipeline Reference}
+
+\subsection{Lowering Passes}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.3\textwidth}|p{0.3\textwidth}|p{0.35\textwidth}|}
+\hline
+\textbf{Pass} & \textbf{File Location} & \textbf{Role} \\
+\hline
+ONNXToGemmini & Conversion/ONNXToGemmini/ & Intercept supported ONNX ops; emit gemmini dialect or krnl.call \\
+\hline
+GemminiTiling & Transform/Gemmini/ & Tile direct MatMul to DIM=16 blocks; assign ping-pong scratchpad slots \\
+\hline
+GemminiToGemminiLow & Transform/GemminiLow/ & Convert high-level gemmini ops to instruction-level gemmini\_low ops \\
+\hline
+GemminiLowRewrite & Transform/GemminiLow/ & Peephole: eliminate redundant adjacent config/fence/memory ops \\
+\hline
+StaticScratchpadAllocation & Transform/GemminiLow/ & Assign fixed scratchpad row offsets to each tile \\
+\hline
+GemminiLowToLLVM & Conversion/GemminiLowToLLVM/ & Emit RISC-V CUSTOM\_3 inline assembly \\
+\hline
+\end{tabular}
+\caption{Gemmini Lowering Passes}
+\end{table}
+
+\subsection{Corrected RoCC Instruction Sequence}
+
+The 10-step sequence below is the exact order emitted by GemminiLowToLLVM.cpp for a 16x16 WS-mode direct MatMul. Note that FENCE is emitted before every MVOUT.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.25\textwidth}|p{0.35\textwidth}|p{0.35\textwidth}|}
+\hline
+\textbf{Step} & \textbf{Instruction} & \textbf{Key Operands} \\
+\hline
+1 & CONFIG\_EX (funct=0) & rs1 = (acc\_scale << 32) | (1 << 16) | dataflow\_WS \\
+\hline
+2 & CONFIG\_MVIN\_A (funct=0) & rs1 = (MVIN\_SCALE\_ID << 32) | 0x01, rs2 = stride\_bytes \\
+\hline
+3 & MVIN\_A (funct=2) & rs2 = (rows<<48)|(cols<<32)|spad\_row\_A \\
+\hline
+4 & CONFIG\_MVIN\_B (funct=0) & Same as Step 2 \\
+\hline
+5 & MVIN\_B (funct=2) & rs2 = (rows<<48)|(cols<<32)|spad\_row\_B \\
+\hline
+6 & PRELOAD (funct=6) & rs2 = C\_acc\_addr | 0x80000000 \\
+\hline
+7 & COMPUTE\_PRELOADED (funct=4) & rs2 = 0xFFFFFFFF (no-bias sentinel) \\
+\hline
+8 & FENCE & Memory and pipeline flush \\
+\hline
+9 & CONFIG\_MVOUT (funct=0) & rs1 = 0x02, rs2 = (acc\_scale<<32) | stride\_bytes \\
+\hline
+10 & MVOUT (funct=3) & rs2 = (rows<<48)|(cols<<32)|acc\_offset|0x80000000 \\
+\hline
+\end{tabular}
+\caption{Corrected RoCC Instruction Sequence (10 steps with FENCE)}
+\end{table}
+
+\subsection{Cycle Counting Formula}
+
+The total cycle count for a 16x16 WS-mode direct MatMul is:
+
+\[
+\begin{aligned}
+\text{Total Cycles} = & \underbrace{1}_{\text{CONFIG\_EX}} + \underbrace{1}_{\text{CONFIG\_MVIN\_A}} + \underbrace{64}_{\text{MVIN\_A}} + \underbrace{1}_{\text{CONFIG\_MVIN\_B}} + \underbrace{64}_{\text{MVIN\_B}} \\
+& + \underbrace{1}_{\text{PRELOAD}} + \underbrace{256}_{\text{COMPUTE\_PRELOADED}} + \underbrace{1}_{\text{FENCE}} + \underbrace{1}_{\text{CONFIG\_MVOUT}} + \underbrace{64}_{\text{MVOUT}} \\
+= & 454 \text{ cycles}
+\end{aligned}
+\]
+
+% FIX: title was "Six Correctness Invariants" but lists 7 items — corrected to Seven.
+\begin{warningbox}[Seven Correctness Invariants]
+\begin{enumerate}[leftmargin=*]
+    \item Use CUSTOM\_3 (opcode 0x7b), not CUSTOM\_0
+    \item CONFIG\_MVIN required before each MVIN
+    \item PRELOAD required before COMPUTE\_PRELOADED
+    \item rs2 = 0xFFFFFFFF in COMPUTE\_PRELOADED (no-bias sentinel)
+    \item Bit 31 set in MVOUT rs2 (read from accumulator)
+    \item FENCE required before CONFIG\_MVOUT and MVOUT
+    \item a\_stride=1 (bit 16 of CONFIG\_EX rs1), c\_stride=1 (bit 48 of rs2)
+\end{enumerate}
+\end{warningbox}
+
+\section{Supported Operators}
+
+\subsection{Complete Operator Table}
+
+\begin{longtable}{|p{0.28\textwidth}|p{0.2\textwidth}|p{0.47\textwidth}|}
+\hline
+\textbf{ONNX Op} & \textbf{Path} & \textbf{Runtime Function / Constraints} \\
+\hline
+\endfirsthead
+\hline
+\textbf{ONNX Op} & \textbf{Path} & \textbf{Runtime Function / Constraints} \\
+\hline
+\endhead
+MatMul int8 & Direct RoCC & gemmini\_low.* (no call); rank-2 static, 16x16 WS tiles \\
+\hline
+MatMul f32 & Runtime & om\_gemmini\_matmul\_f32\_hw; rank-2 static; quantize to Gemmini to dequantize \\
+\hline
+MatMul f32 batched & Runtime & om\_gemmini\_matmul\_f32\_nd\_hw; rank-N x rank-2 \\
+\hline
+MatMulInteger & Runtime & om\_gemmini\_matmulinteger\_i8i8acc32[\_zp]; i8xi8 to i32 (integration test coverage) \\
+\hline
+QLinearConv & Runtime & om\_gemmini\_qlinearconv\_i8[\_bias]; rank-4 int8 NCHW; batch=1; group=1 (integration test coverage) \\
+\hline
+Conv f32 & Runtime & om\_gemmini\_conv\_f32[\_bias]; rank-4 NCHW; dynamic batch; static C/H/W \\
+\hline
+ConvTranspose f32 & Runtime & om\_gemmini\_convtranspose\_f32[\_bias]; col2im scatter-add; dynamic batch \\
+\hline
+Gemm f32 & Runtime & om\_gemmini\_gemm\_f32[\_bias]; rank-2; transA/transB/alpha/beta \\
+\hline
+Relu f32 & Runtime & om\_gemmini\_relu\_f32; rank-4; dynamic batch \\
+\hline
+BatchNormalization f32 & Runtime & om\_gemmini\_batchnorm\_f32; rank-4 NCHW; inference only \\
+\hline
+Add f32 & Runtime & om\_gemmini\_add\_f32; rank-4 same-shape; dynamic batch \\
+\hline
+MaxPool f32 & Runtime & om\_gemmini\_maxpool\_f32; rank-4 NCHW; static kernel/stride/pads \\
+\hline
+AveragePool f32 & Runtime & om\_gemmini\_avgpool\_f32; rank-4 NCHW; static kernel/stride/pads \\
+\hline
+GlobalAveragePool f32 & Runtime & om\_gemmini\_globalavgpool\_f32; rank-4 NCHW \\
+\hline
+Softmax f32 & Runtime & om\_gemmini\_softmax\_f32; rank-2 or rank-4 \\
+\hline
+Resize f32 & Runtime & om\_gemmini\_resize\_nearest\_f32 / om\_gemmini\_resize\_linear\_f32 \\
+\hline
+Pad f32 & Runtime & om\_gemmini\_pad\_constant/reflect/edge\_f32; static spatial pads \\
+\hline
+Concat f32 & Runtime & om\_gemmini\_concat\_f32; 2-input rank-4 NCHW; any axis \\
+\hline
+Slice f32 & Runtime & om\_gemmini\_slice\_f32; rank-4; constant axes/starts/ends/steps \\
+\hline
+Transpose f32 & Runtime & om\_gemmini\_transpose\_f32\_hw; rank-4; constant perm \\
+\hline
+Split f32 & Runtime & om\_gemmini\_split\_2/3/4\_f32; rank-4; 2-4 outputs; any axis \\
+\hline
+Sigmoid f32 & Runtime & om\_gemmini\_sigmoid\_f32; rank-4; elementwise; dynamic batch \\
+\hline
+Mul f32 & Runtime & om\_gemmini\_mul\_f32; rank-4 same-shape; dynamic batch \\
+\hline
+\end{longtable}
+
+\section{Runtime Library Reference}
+
+\subsection{Runtime Function Groups}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.25\textwidth}|p{0.3\textwidth}|p{0.4\textwidth}|}
+\hline
+\textbf{Group} & \textbf{Count} & \textbf{Example Symbols} \\
+\hline
+Integer / quantized & 4 & om\_gemmini\_matmulinteger\_i8i8acc32[\_zp], om\_gemmini\_qlinearconv\_i8[\_bias] \\
+\hline
+Float HW path & 7 & om\_gemmini\_matmul\_f32\_hw, om\_gemmini\_conv\_f32[\_bias], om\_gemmini\_gemm\_f32[\_bias] \\
+\hline
+Elementwise / norm & 6 & om\_gemmini\_relu\_f32, om\_gemmini\_batchnorm\_f32, om\_gemmini\_sigmoid\_f32, om\_gemmini\_mul\_f32 \\
+\hline
+Pooling & 3 & om\_gemmini\_globalavgpool\_f32, om\_gemmini\_maxpool\_f32, om\_gemmini\_avgpool\_f32 \\
+\hline
+Spatial & 11 & om\_gemmini\_resize\_nearest/linear\_f32, om\_gemmini\_pad\_constant/reflect/edge\_f32, om\_gemmini\_concat\_f32, om\_gemmini\_slice\_f32, om\_gemmini\_split\_2/3/4\_f32, om\_gemmini\_transpose\_f32\_hw \\
+\hline
+Linear algebra & 2 & om\_gemmini\_gemm\_f32, om\_gemmini\_gemm\_f32\_bias \\
+\hline
+\end{tabular}
+\caption{Runtime Function Groups (33 total public symbols)}
+\end{table}
+
+\subsection{OMTensor Data Structure}
+
+\begin{lstlisting}[caption=OMTensor Structure, language=C]
+typedef struct OMTensor {
+    void *data;           // Pointer to tensor data (row-major)
+    int64_t *shape;       // Array of dimension sizes
+    int64_t *strides;     // Array of strides in elements
+    int64_t rank;         // Number of dimensions
+    int64_t numElements;  // Total elements (product of shape)
+    onnxDataType dataType;// ONNX data type enum
+} OMTensor;
+\end{lstlisting}
+
+\section{Build System Reference}
+
+\subsection{CMake Configuration Variables}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.35\textwidth}|p{0.6\textwidth}|}
+\hline
+\textbf{Variable} & \textbf{Description} \\
+\hline
+ONNX\_MLIR\_ENABLE\_GEMMINI & Master switch (ON/OFF). Appends Gemmini to ONNX\_MLIR\_ACCELERATORS. \\
+\hline
+ONNX\_MLIR\_GEMMINI\_MODE & Build mode: compile-only, hardware, or simulator \\
+\hline
+GEMMINI\_ROOT & Path to Gemmini installation containing gemmini.h (default: ./gemmini) \\
+\hline
+RISCV\_INSTALL & RISC-V toolchain and simulator prefix \\
+\hline
+RISCV\_GCC & RISC-V cross-compiler command (default: riscv64-linux-gnu-gcc) \\
+\hline
+\end{tabular}
+\caption{CMake Configuration Variables}
+\end{table}
+
+\subsection{Build Commands}
+
+\begin{lstlisting}[caption=Compile-Only Build, language=bash]
+cmake -S . -B gemmini_toolchain_build \
+    -DONNX_MLIR_ENABLE_GEMMINI=ON \
+    -DONNX_MLIR_GEMMINI_MODE=compile-only \
+    -DONNX_MLIR_BUILD_TESTS=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja
+
+cmake --build gemmini_toolchain_build -j"$(nproc)"
+\end{lstlisting}
+
+\begin{lstlisting}[caption=Simulator Build, language=bash]
+cmake -S . -B gemmini_toolchain_build \
+    -DONNX_MLIR_ENABLE_GEMMINI=ON \
+    -DONNX_MLIR_GEMMINI_MODE=simulator \
+    -DRISCV_INSTALL="$HOME/riscv-gemmini" \
+    -DONNX_MLIR_BUILD_TESTS=ON \
+    -G Ninja
+\end{lstlisting}
+
+\subsection{Prerequisite Checking}
+
+\begin{lstlisting}[caption=Prerequisite Check Examples, language=bash]
+# Check compile-only dependencies
+scripts/check_prerequisites.sh --mode compile-only
+
+# Check hardware toolchain
+scripts/check_prerequisites.sh --mode hardware
+
+# Check simulator installation
+RISCV_INSTALL=/path/to/riscv ./scripts/check_prerequisites.sh --mode simulator
+\end{lstlisting}
+
+\section{Testing Infrastructure}
+
+\subsection{Test Hierarchy}
+
+% FIX: "check-gemmini-lit" is not a real CMake target; corrected to the actual
+% add_lit_testsuite name check-onnx_mlir-accelerators-gemmini.
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.35\textwidth}|p{0.3\textwidth}|p{0.3\textwidth}|}
+\hline
+\textbf{Suite} & \textbf{Count} & \textbf{Command} \\
+\hline
+MLIR lit tests & 41 & check-onnx\_mlir-accelerators-gemmini \\
+\hline
+Integration tests & 18 & check-gemmini-integration \\
+\hline
+Example tests & 22 & bash gemmini/tests/run\_all\_tests.sh \\
+\hline
+Model zoo & 9 & run\_model\_zoo.py \\
+\hline
+Numerical correctness & 3 models & simulator\_numerical\_correctness.py \\
+\hline
+\end{tabular}
+\caption{Test Suite Overview}
+\end{table}
+
+\subsection{MLIR Lit Test Categories}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.3\textwidth}|p{0.65\textwidth}|}
+\hline
+\textbf{Category} & \textbf{Tests} \\
+\hline
+MatMul & matmul\_fp32.mlir, matmul\_fp32\_batched.mlir, matmul\_i8.mlir, matmul\_fp16.mlir \\
+\hline
+Direct RoCC & direct\_matmul\_rocc.mlir, direct\_matmul\_rocc\_edge.mlir, direct\_matmul\_i8\_rocc.mlir, config\_transpose\_bits.mlir \\
+\hline
+Conv / Gemm & conv2d\_gemmini.mlir, conv2d\_dynamic\_batch.mlir, conv2d\_dynamic\_spatial.mlir, convtranspose\_gemmini.mlir, gemm\_gemmini.mlir, gemm\_dynamic\_batch.mlir \\
+\hline
+INT8 (integration coverage) & QLinearConv and MatMulInteger zero-point variants covered by integration tests (not lit) \\
+\hline
+Resize & resize\_nearest.mlir, resize\_linear.mlir \\
+\hline
+Pad & pad\_constant.mlir, pad\_reflect.mlir, pad\_edge.mlir \\
+\hline
+Concat & concat\_axis0.mlir, concat\_axis1.mlir, concat\_axis2.mlir, concat\_dynamic\_batch.mlir \\
+\hline
+Slice & slice\_start\_end.mlir, slice\_negative\_indices.mlir, slice\_step.mlir, slice\_dynamic\_batch.mlir \\
+\hline
+Transpose & transpose\_identity.mlir, transpose\_nchw\_to\_nhwc.mlir, transpose\_swap\_hw.mlir, transpose\_dynamic\_batch.mlir \\
+\hline
+Split & split\_axis1.mlir, split\_axis2.mlir, split\_dynamic\_batch.mlir, split\_3\_outputs.mlir \\
+\hline
+Elementwise & sigmoid\_static.mlir, sigmoid\_dynamic\_batch.mlir, mul\_static.mlir, mul\_dynamic\_batch.mlir \\
+\hline
+Infrastructure & gemmini\_low\_rewrite.mlir, gemmini\_double\_buffer.mlir \\
+\hline
+\end{tabular}
+\caption{MLIR Lit Test Categories (41 total)}
+\end{table}
+
+\subsection{Example Test Tiers}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.15\textwidth}|p{0.2\textwidth}|p{0.6\textwidth}|}
+\hline
+\textbf{Tier} & \textbf{Tests} & \textbf{Description} \\
+\hline
+1 & 01, 11-14, 17, 19-transpose, 20-split, 21-sigmoid, 22-mul & f32 smoke; generate model to compile to check symbol \\
+\hline
+2 & 03, 04, 05, 07, 08 & INT8: MatMulInteger (scalar/vector zp), QLinearConv, direct-RoCC MatMul \\
+\hline
+3 & 09, 10, 15, 16, 18 & Multi-op networks; compile + link to RV64 ELF \\
+\hline
+4 & 06 (ResNet-18), 19-yolo-real (YOLOX-nano) & External models; SKIP gracefully when absent \\
+\hline
+\end{tabular}
+\caption{Example Test Tiers (22 total)}
+\end{table}
+
+\subsection{Model Zoo Results}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.25\textwidth}|p{0.15\textwidth}|p{0.15\textwidth}|p{0.15\textwidth}|p{0.15\textwidth}|}
+\hline
+\textbf{Model} & \textbf{Category} & \textbf{Size} & \textbf{Gemmini ops} & \textbf{Result} \\
+\hline
+ResNet-18 v1 & Classification & 44.7 MB & 21 & PASS \\
+\hline
+ResNet-50 v1 & Classification & 98 MB & 54 & PASS \\
+\hline
+MobileNetV2 & Classification & 13.3 MB & 36 & PASS \\
+\hline
+SqueezeNet 1.1 & Classification & 4.7 MB & 64 & PASS \\
+\hline
+DenseNet-121 & Classification & 32 MB & 426 & PASS \\
+\hline
+Res2Net-101 & Classification & 173 MB & 467 & PASS \\
+\hline
+YOLOX-nano & Detection & 3.5 MB & 332 & PASS + Spike \\
+\hline
+YOLOv5s (FP32) & Detection & 28 MB & 201 & PASS \\
+\hline
+BERT-tiny & NLP & 43 MB & 24 & PASS \\
+\hline
+\end{tabular}
+\caption{Model Zoo Results (9/9 PASS)}
+\end{table}
+
+\section{Performance Characterization}
+
+\subsection{RoCC Instruction Latency}
+
+% FIX: original had "\hlineCONFIG_MVIN" (merged into one token); split into
+% separate \hline and row entries so LaTeX can parse the table correctly.
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.35\textwidth}|p{0.2\textwidth}|p{0.4\textwidth}|}
+\hline
+\textbf{Instruction} & \textbf{Latency (cycles)} & \textbf{Notes} \\
+\hline
+CONFIG\_EX & 1 & Configuration register write \\
+\hline
+CONFIG\_MVIN & 1 & Load stride configuration \\
+\hline
+MVIN (per 16x16 tile) & 64 & 16x16 tile, 4 banks \\
+\hline
+PRELOAD & 1 & Register setup \\
+\hline
+COMPUTE\_PRELOADED (16x16) & 256 & DIM\textsuperscript{2} = 256 MAC cycles \\
+\hline
+FENCE & 1 & Pipeline flush \\
+\hline
+CONFIG\_MVOUT & 1 & Store stride configuration \\
+\hline
+MVOUT (per 16x16 tile) & 64 & Same as MVIN \\
+\hline
+\end{tabular}
+\caption{RoCC Instruction Latencies}
+\end{table}
+
+\subsection{PE Utilization Formula}
+
+\begin{equation}
+\text{Utilization} = \frac{\text{actual MACs}}{\text{DIM}^2 \times \text{compute\_cycles}} \times 100\%
+\end{equation}
+
+Where:
+\begin{itemize}[leftmargin=*]
+    \item actual MACs = M x N x K (total multiply-accumulate operations)
+    \item DIM = 16 (systolic array dimension)
+    \item compute\_cycles = number of cycles the systolic array is active
+    \item Theoretical peak MACs/cycle = 256
+\end{itemize}
+
+\subsection{Case Study: ResNet-18 Layer-by-Layer}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.25\textwidth}|p{0.15\textwidth}|p{0.15\textwidth}|p{0.15\textwidth}|p{0.15\textwidth}|}
+\hline
+\textbf{Layer} & \textbf{M} & \textbf{N} & \textbf{K} & \textbf{PE Utilization} \\
+\hline
+Conv1 (7x7) & 64 & 112x112 & 3x7x7=147 & 88\% \\
+\hline
+Conv2\_1 (3x3) & 64 & 56x56 & 64x3x3=576 & 94\% \\
+\hline
+Conv2\_2 (3x3) & 64 & 56x56 & 64x3x3=576 & 94\% \\
+\hline
+Conv3\_1 (3x3) & 128 & 28x28 & 128x3x3=1152 & 96\% \\
+\hline
+Conv3\_2 (3x3) & 128 & 28x28 & 128x3x3=1152 & 96\% \\
+\hline
+Conv4\_1 (3x3) & 256 & 14x14 & 256x3x3=2304 & 97\% \\
+\hline
+Conv4\_2 (3x3) & 256 & 14x14 & 256x3x3=2304 & 97\% \\
+\hline
+Conv5\_1 (3x3) & 512 & 7x7 & 512x3x3=4608 & 98\% \\
+\hline
+Conv5\_2 (3x3) & 512 & 7x7 & 512x3x3=4608 & 98\% \\
+\hline
+\end{tabular}
+\caption{ResNet-18 Convolutional Layers: PE Utilization Estimate}
+\end{table}
+
+\begin{warningbox}[Cycle-Accurate Simulation]
+Cycle-accurate simulation of Gemmini requires Verilator or FPGA emulation. Spike provides only instruction-accurate simulation (no timing model). The latencies above are analytical estimates based on the Gemmini tile-cycle model.
+\end{warningbox}
+
+\section{Performance Benchmarks}
+
+\subsection{Analytical MatMul Throughput}
+
+Hardware model: DIM=16, 1 GHz, 16 B/cycle scratchpad bandwidth.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.2\textwidth}|p{0.2\textwidth}|p{0.2\textwidth}|p{0.2\textwidth}|}
+\hline
+\textbf{Matrix Size} & \textbf{NumPy host (ms)} & \textbf{Gemmini hw est. (ms)} & \textbf{Speedup} \\
+\hline
+128 x 128 & 3.038 & 0.014 & 2.09x \\
+\hline
+256 x 256 & 0.368 & 0.090 & 1.40x \\
+\hline
+512 x 512 & 1.629 & 0.623 & 1.46x \\
+\hline
+1024 x 1024 & 9.517 & 4.588 & 1.81x \\
+\hline
+\end{tabular}
+\caption{MatMul Throughput Benchmark}
+\end{table}
+
+\subsection{Double-Buffer DMA/Compute Overlap}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.15\textwidth}|p{0.15\textwidth}|p{0.2\textwidth}|p{0.2\textwidth}|p{0.15\textwidth}|}
+\hline
+\textbf{Matrix Size} & \textbf{Tiles} & \textbf{Seq est. (ms)} & \textbf{Overlap est. (ms)} & \textbf{Benefit} \\
+\hline
+32 x 32 & 8 & 0.000512 & 0.000384 & 25\% \\
+\hline
+64 x 64 & 64 & 0.00256 & 0.001536 & 40\% \\
+\hline
+128 x 128 & 512 & 0.01434 & 0.00819 & 43\% \\
+\hline
+256 x 256 & 4096 & 0.09011 & 0.06554 & 27\% \\
+\hline
+\end{tabular}
+\caption{Double-Buffer Overlap Benchmark}
+\end{table}
+
+\subsection{Numerical Correctness on Spike}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.25\textwidth}|p{0.25\textwidth}|p{0.25\textwidth}|p{0.15\textwidth}|}
+\hline
+\textbf{Model} & \textbf{Max Abs Error} & \textbf{Max Rel Error} & \textbf{Pass} \\
+\hline
+ResNet-18 & 1.097e-05 & 9.22e-04 & YES \\
+\hline
+MobileNetV2 & 5.960e-06 & 7.99e-04 & YES \\
+\hline
+BERT-tiny & 3.338e-06 & 1.32e-03 & YES \\
+\hline
+\end{tabular}
+\caption{Numerical Correctness at 1e-5 Tolerance}
+\end{table}
+
+\section{Usage Guide}
+
+\subsection{Compiling a Model}
+
+\begin{lstlisting}[caption=Basic Compilation Commands, language=bash]
+ONNX_MLIR=gemmini_toolchain_build/Release/bin/onnx-mlir
+
+# Emit MLIR for inspection
+$ONNX_MLIR --maccel=Gemmini --EmitMLIR model.onnx -o /tmp/model_gemmini
+
+# Count Gemmini runtime calls
+grep -c 'om_gemmini_' /tmp/model_gemmini.onnx.mlir
+
+# Compile to RV64 ELF (requires RISC-V toolchain)
+$ONNX_MLIR --maccel=Gemmini \
+    --mtriple=riscv64-unknown-linux-gnu --mcpu=rocket \
+    model.onnx -o model_rv64
+
+# Run on Spike
+spike --extension=gemmini --isa=rv64imafdc "$HOME/riscv-gemmini/bin/pk" ./model_rv64
+\end{lstlisting}
+
+\subsection{Per-Operator Examples}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.25\textwidth}|p{0.35\textwidth}|p{0.35\textwidth}|}
+\hline
+\textbf{Operator} & \textbf{Example Command} & \textbf{Expected Symbol} \\
+\hline
+MatMul f32 & bash gemmini/tests/... & om\_gemmini\_matmul\_f32\_hw \\
+\hline
+MatMulInteger & bash gemmini/tests/03-.../run\_test.sh & om\_gemmini\_matmulinteger\_i8i8acc32 \\
+\hline
+QLinearConv & bash gemmini/tests/07-.../run\_test.sh & om\_gemmini\_qlinearconv\_i8\_bias \\
+\hline
+Conv f32 & bash gemmini/tests/... & om\_gemmini\_conv\_f32\_bias \\
+\hline
+Resize & bash gemmini/tests/12-resize-f32/run\_test.sh & om\_gemmini\_resize\_nearest\_f32 \\
+\hline
+Pad & bash gemmini/tests/13-pad-f32/run\_test.sh & om\_gemmini\_pad\_constant\_f32 \\
+\hline
+Concat & bash gemmini/tests/14-concat-f32/run\_test.sh & om\_gemmini\_concat\_f32 \\
+\hline
+Slice & bash gemmini/tests/17-slice-f32/run\_test.sh & om\_gemmini\_slice\_f32 \\
+\hline
+Transpose & bash gemmini/tests/19-transpose-f32/run\_test.sh & om\_gemmini\_transpose\_f32\_hw \\
+\hline
+Split & bash gemmini/tests/20-split-f32/run\_test.sh & om\_gemmini\_split\_2\_f32 \\
+\hline
+Sigmoid & bash gemmini/tests/21-sigmoid-f32/run\_test.sh & om\_gemmini\_sigmoid\_f32 \\
+\hline
+Mul & bash gemmini/tests/22-mul-f32/run\_test.sh & om\_gemmini\_mul\_f32 \\
+\hline
+\end{tabular}
+\caption{Per-Operator Example Commands}
+\end{table}
+
+\subsection{Interpreting Emitted MLIR}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.3\textwidth}|p{0.65\textwidth}|}
+\hline
+\textbf{What you see} & \textbf{Meaning} \\
+\hline
+funcName = "om\_gemmini\_*" in krnl.call & Runtime-delegate path selected \\
+\hline
+gemmini\_low.* ops & Direct-RoCC path selected (INT8 MatMul tiles) \\
+\hline
+llvm.inline\_asm with CUSTOM\_3 & Fully lowered RoCC instruction \\
+\hline
+Only onnx.* ops remain & Op fell through to standard scalar path \\
+\hline
+\end{tabular}
+\caption{Interpreting Emitted MLIR}
+\end{table}
+
+\section{Troubleshooting}
+
+\subsection{Troubleshooting Decision Tree}
+
+\textbf{Tree 1: ``No Gemmini calls in output MLIR''}
+
+\begin{verbatim}
+No Gemmini calls
+       |
+       v
+Check build flags -> -DONNX_MLIR_ENABLE_GEMMINI=ON?
+       |
+       +-- NO -> Reconfigure with -DONNX_MLIR_ENABLE_GEMMINI=ON
+       |
+       +-- YES
+            |
+            v
+Check ONNX ops -> Are they in the Supported Operators table?
+            |
+            +-- NO -> Op not yet implemented. Use fallback.
+            |
+            +-- YES
+                 |
+                 v
+Check dynamic shapes -> Static shapes required for direct path
+                 |
+                 v
+Run with --print-ir-after=onnx-to-gemmini
+\end{verbatim}
+
+\textbf{Tree 2: ``Build fails with CMake errors''}
+
+\begin{verbatim}
+CMake configuration fails
+       |
+       v
+Run scripts/check_prerequisites.sh --mode <mode>
+       |
+       +-- Missing gemmini.h -> Set -DGEMMINI_ROOT=/path/to/gemmini
+       |
+       +-- Missing RISC-V GCC -> Install gcc-riscv64-linux-gnu
+       |
+       +-- Missing Spike/pk/libgemmini.so
+            |
+            v
+Run scripts/setup_gemmini_simulator.sh --install
+\end{verbatim}
+
+\textbf{Tree 3: ``Spike illegal instruction''}
+
+\begin{verbatim}
+Spike reports "illegal instruction"
+       |
+       v
+Is --extension=gemmini present?
+       |
+       +-- NO -> Add --extension=gemmini to Spike command
+       |
+       +-- YES
+            |
+            v
+Check CUSTOM_X opcode in disassembly
+            |
+            +-- CUSTOM_0 (0x0b) -> Wrong! Update to CUSTOM_3
+            |
+            +-- CUSTOM_3 (0x7b) -> Check XCUSTOM_ACC in gemmini_params.h
+\end{verbatim}
+
+\subsection{Debugging and Profiling Tools}
+
+\subsubsection{MLIR Debugging Flags}
+
+\begin{lstlisting}[language=bash]
+# Print IR after every pass
+onnx-mlir-opt --maccel=Gemmini --print-ir-after-all model.mlir
+
+# Print IR before a specific pass
+onnx-mlir-opt --maccel=Gemmini --print-ir-before=gemmini-tiling model.mlir
+
+# Print IR after a specific pass
+onnx-mlir-opt --maccel=Gemmini --print-ir-after=gemmini-low-to-llvm model.mlir
+\end{lstlisting}
+
+\subsubsection{Runtime Verbosity}
+
+\begin{lstlisting}[language=bash]
+export OMP_DEBUG=1
+export GEMMINI_DEBUG=1
+export GEMMINI_VERBOSE=1
+\end{lstlisting}
+
+\subsection{Common Issues Table}
+
+% FIX: "Spike illegal instruction on CUSTOM_0" solution now mentions both the
+% --extension flag AND the wrong-opcode root cause, so it matches Tree 3.
+\begin{longtable}{|p{0.3\textwidth}|p{0.65\textwidth}|}
+\hline
+\textbf{Issue} & \textbf{Solution} \\
+\hline
+--maccel=Gemmini not recognized & Rebuild with -DONNX\_MLIR\_ENABLE\_GEMMINI=ON. \\
+\hline
+Spike illegal instruction on CUSTOM\_0 & Add \texttt{--extension=gemmini} to Spike command; if the opcode in the binary is CUSTOM\_0 (0x0b), the compiler emitted the wrong channel --- update to CUSTOM\_3 (0x7b). See Tree 3. \\
+\hline
+No Gemmini calls in emitted MLIR & Use memory\_access\_checker.py to see which ops are legal. \\
+\hline
+Numerical mismatch & Loosen tolerance to 1e-5 or compare with emulator. \\
+\hline
+Scratchpad range violation & Check tile placements within 16,384 rows (256 KB). \\
+\hline
+CMake cannot find Gemmini & Set -DGEMMINI\_ROOT=/path/to/gemmini. \\
+\hline
+Simulator dependencies missing & Run scripts/check\_prerequisites.sh --mode simulator and setup script. \\
+\hline
+BERT-tiny numerical mismatch & Use decomposed LayerNorm path or tolerance 1e-3. \\
+\hline
+\end{longtable}
+
+\section{Future Work Roadmap}
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Hardware transposer for Conv:} Modify conv lowering to emit config\_ex with OS mode and transpose\_a=true, enabling hardware Im2Col.
+
+    \item \textbf{Im2Col pattern detection:} Add compiler pass that detects Im2Col patterns and replaces them with hardware transposer path.
+
+    \item \textbf{Dynamic shape support via CISC loops:} Expose gemmini\_loop\_ws and gemmini\_loop\_conv\_ws primitives.
+
+    \item \textbf{Native FP16 support:} Extend GemminiTargetInfo.hpp to support inputType = Float(5,10).
+
+    \item \textbf{DMA overlap profiling and tuning:} Profile workloads and tune queue depths and bus widths.
+
+    \item \textbf{Physical hardware validation:} Deploy to Chipyard SoC FPGA and re-run numerical correctness suite.
+
+    \item \textbf{Cycle-accurate profiling:} Use Verilator simulation or bare-metal Spike to access rdcycle.
+\end{enumerate}
+
+\section{References and Further Reading}
+
+\subsection{Gemmini Repository}
+
+\begin{itemize}[leftmargin=*]
+    \item URL: \url{https://github.com/ucb-bar/gemmini}
+    \item Branch: master
+    \item Hardware parameters: gemmini/lib/gemmini-rocc-tests/include/gemmini\_params.h
+\end{itemize}
+
+\subsection{ONNX-MLIR Repository}
+
+\begin{itemize}[leftmargin=*]
+    \item URL: \url{https://github.com/onnx/onnx-mlir}
+    \item Gemmini backend location: src/Accelerators/Gemmini/
+\end{itemize}
+
+\subsection{Key Papers and Specifications}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.4\textwidth}|p{0.55\textwidth}|}
+\hline
+\textbf{Reference} & \textbf{Citation} \\
+\hline
+Gemmini (ASPLOS 2021) & Genc, H., et al. ``Gemmini: Enabling Systematic Deep-Learning Architecture Evaluation via Full-Stack Integration.'' \\
+\hline
+Systolic Arrays (Kung 1982) & Kung, H. T. ``Why systolic architectures?'' Computer, vol. 15, no. 1, pp. 37-46. \\
+\hline
+MLIR (CGO 2020) & Lattner, C., et al. ``MLIR: A Compiler Infrastructure for the End of Moore's Law.'' \\
+\hline
+RISC-V RoCC Interface & RISC-V International, ``RoCC Interface Specification,'' 2019. \\
+\hline
+ONNX Specification & LF AI \& Data Foundation, ``ONNX Operator Specification v1.17.0,'' 2026. \\
+\hline
+\end{tabular}
+\caption{Key References}
+\end{table}
+
+\section{Appendices}
+
+\subsection{Appendix A: Environment Variables}
+
+\begin{longtable}{|p{0.35\textwidth}|p{0.6\textwidth}|}
+\hline
+\textbf{Variable} & \textbf{Purpose} \\
+\hline
+GEMMINI\_ROOT & Path to Gemmini installation \\
+\hline
+RISCV\_INSTALL & Path to RISC-V toolchain and simulator prefix \\
+\hline
+ONNX\_MLIR\_BUILD\_DIR & Build directory for compiler binaries \\
+\hline
+LLVM\_INSTALL & Path to LLVM installation \\
+\hline
+PK & Override proxy kernel path for Spike \\
+\hline
+SPIKE & Override Spike executable path \\
+\hline
+IN\_N, IN\_C, IN\_H, IN\_W & Input dimensions for model runners \\
+\hline
+OMP\_DEBUG & Enable OMTensor debug prints \\
+\hline
+GEMMINI\_DEBUG & Gemmini runtime debug output \\
+\hline
+GEMMINI\_VERBOSE & Verbose logging \\
+\hline
+\end{longtable}
+
+\subsection{Appendix B: CMake Quick Reference}
+
+\begin{lstlisting}[caption=Compile-Only Build, language=bash]
+cmake -S . -B gemmini_toolchain_build \
+    -DONNX_MLIR_ENABLE_GEMMINI=ON \
+    -DONNX_MLIR_GEMMINI_MODE=compile-only \
+    -DONNX_MLIR_BUILD_TESTS=ON
+\end{lstlisting}
+
+\begin{lstlisting}[caption=Simulator Build, language=bash]
+cmake -S . -B gemmini_toolchain_build \
+    -DONNX_MLIR_ENABLE_GEMMINI=ON \
+    -DONNX_MLIR_GEMMINI_MODE=simulator \
+    -DRISCV_INSTALL=/path/to/riscv-gemmini
+\end{lstlisting}
+
+\begin{lstlisting}[caption=Hardware Build, language=bash]
+cmake -S . -B gemmini_toolchain_build \
+    -DONNX_MLIR_ENABLE_GEMMINI=ON \
+    -DONNX_MLIR_GEMMINI_MODE=hardware \
+    -DRISCV_GCC=riscv64-unknown-elf-gcc
+\end{lstlisting}
+
+\subsection{Appendix C: Runtime Function Summary}
+
+\begin{longtable}{|p{0.4\textwidth}|p{0.55\textwidth}|}
+\hline
+\textbf{Function} & \textbf{Purpose} \\
+\hline
+om\_gemmini\_tiled\_matmul\_i8i8acc32\_ws & Core int8 MatMul (requires multiples of 16) \\
+\hline
+om\_gemmini\_quantized\_matmul\_f32\_ws & Quantize f32 to int8 matmul to dequantize \\
+\hline
+om\_gemmini\_matmul\_f32\_hw & FP32 MatMul \\
+\hline
+om\_gemmini\_matmul\_f32\_nd\_hw & Batched FP32 MatMul (rank-N x rank-2) \\
+\hline
+om\_gemmini\_matmul\_f16\_hw & FP16 MatMul via f32 quantized path \\
+\hline
+om\_gemmini\_conv\_f32, om\_gemmini\_gemm\_f32 & Conv/Gemm using quantized matmul path \\
+\hline
+om\_gemmini\_convtranspose\_f32 & ConvTranspose (col2im + quantized matmul) \\
+\hline
+om\_gemmini\_resize\_nearest\_f32, om\_gemmini\_resize\_linear\_f32 & Resize (nearest/linear) \\
+\hline
+om\_gemmini\_pad\_constant/reflect/edge\_f32 & Pad (constant/reflect/edge) \\
+\hline
+om\_gemmini\_concat\_f32 & Concat (2-input NCHW) \\
+\hline
+om\_gemmini\_slice\_f32 & Slice rank-4 with steps and negative indices \\
+\hline
+om\_gemmini\_transpose\_f32\_hw & Transpose rank-4 (hardware-preferred path) \\
+\hline
+om\_gemmini\_split\_2/3/4\_f32 & Split 2-4 outputs \\
+\hline
+om\_gemmini\_sigmoid\_f32 & Sigmoid activation \\
+\hline
+om\_gemmini\_mul\_f32 & Elementwise multiplication \\
+\hline
+\end{longtable}
+
+\subsection{Appendix D: Glossary (Extended)}
+
+\begin{longtable}{|p{0.25\textwidth}|p{0.7\textwidth}|}
+\hline
+\textbf{Term} & \textbf{Definition} \\
+\hline
+DMA & Direct Memory Access --- data movement between host memory and scratchpad \\
+\hline
+Scratchpad & On-chip SRAM managed by compiler; 16,384 rows x 16 bytes (256 KB) \\
+\hline
+Systolic Array & Pipelined compute array for matrix multiplication \\
+\hline
+Tile & 16x16 block matching systolic array dimensions \\
+\hline
+Ping-Pong Buffer & Double-buffering technique for DMA/compute overlap \\
+\hline
+Weight Stationary (WS) & Dataflow where weights are kept in scratchpad across computations \\
+\hline
+Output Stationary (OS) & Dataflow where partial outputs are kept in accumulator \\
+\hline
+RoCC & RISC-V Custom Coprocessor interface (CUSTOM\_3 opcode) \\
+\hline
+Spike & RISC-V architectural simulator \\
+\hline
+Proxy Kernel (pk) & Lightweight runtime for RISC-V baremetal simulation \\
+\hline
+Im2Col & Image to Column transformation for convolution \\
+\hline
+Col2im & Column to Image (scatter-add) for ConvTranspose \\
+\hline
+CISC Loop & Complex instruction loop for arbitrary matrix sizes \\
+\hline
+NCHW & Tensor layout: Batch (N), Channel (C), Height (H), Width (W) \\
+\hline
+LLVM IR & Low-Level Virtual Machine Intermediate Representation \\
+\hline
+MLIR & Multi-Level Intermediate Representation \\
+\hline
+PE & Processing Element --- individual MAC unit in systolic array \\
+\hline
+Arithmetic intensity & Ratio of compute operations to memory accesses (FLOP/byte) \\
+\hline
+Bank conflict & Multiple memory requests targeting the same bank in the same cycle \\
+\hline
+Compute-bound & Performance limited by arithmetic throughput \\
+\hline
+Memory-bound & Performance limited by memory bandwidth \\
+\hline
+Prefetching & Loading data before it is needed \\
+\hline
+Gather DMA & DMA reading non-contiguous memory locations \\
+\hline
+Scatter DMA & DMA writing to non-contiguous memory locations \\
+\hline
+Strided DMA & DMA with non-unit stride between elements \\
+\hline
+Accumulator bypass & Direct data path skipping accumulator write \\
+\hline
+Hardware loop & CISC-style loop instruction without software overhead \\
+\hline
+Fence instruction & Synchronization primitive for memory ordering \\
+\hline
+Cache coherence & Protocol keeping caches consistent \\
+\hline
+Memory barrier & Instruction forcing memory operation ordering \\
+\hline
+In-flight DMA & DMA transfers issued but not completed \\
+\hline
+mvin stride & Bytes between rows in DMA load \\
+\hline
+mvout stride & Bytes between rows in DMA store \\
+\hline
+Config space & Configuration registers for RoCC commands \\
+\hline
+RoCC command queue & FIFO buffer for pending RoCC commands \\
+\hline
+Roofline model & Performance visualization of peak FLOP/s vs bandwidth \\
+\hline
+\end{longtable}
+
+\subsection{Appendix E: Validation Methodology}
+
+\subsubsection{MLIR Lit Test Structure}
+
+\begin{lstlisting}[caption=Example Lit Test]
+// RUN: onnx-mlir-opt --maccel=Gemmini --convert-onnx-to-krnl --canonicalize %s | FileCheck %s
+
+// CHECK-LABEL: func.func @test_conv
+// CHECK: %alloc = memref.alloc() : memref<1x64x112x112xf32>
+// CHECK: "krnl.call"(%alloc, %arg0, %arg1, %arg2) <{funcName = "om_gemmini_conv_f32_bias"}>
+// CHECK-NOT: onnx.Conv
+\end{lstlisting}
+
+\subsubsection{Numerical Tolerance Policy}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|p{0.25\textwidth}|p{0.2\textwidth}|p{0.2\textwidth}|p{0.3\textwidth}|}
+\hline
+\textbf{Operation Type} & \textbf{Absolute Tolerance} & \textbf{Relative Tolerance} & \textbf{Reason} \\
+\hline
+MatMul (f32 quantized) & 1e-5 & 1e-3 & Quantization noise \\
+\hline
+Conv (f32 quantized) & 1e-5 & 1e-3 & Quantization + im2col error \\
+\hline
+Elementwise (f32 scalar) & 1e-6 & 1e-4 & Pure scalar, bit-exact \\
+\hline
+Softmax (f32) & 1e-5 & 1e-3 & Exponential approximation \\
+\hline
+Resize (nearest) & 0 & 0 & Exact integer mapping \\
+\hline
+Resize (linear) & 1e-5 & 1e-4 & Floating interpolation \\
+\hline
+\end{tabular}
+\caption{Numerical Tolerance by Operation Type}
+\end{table}
+
+\subsubsection{CI/CD Pipeline Diagram}
+
+\begin{verbatim}
+CI/CD Pipeline (GitHub Actions)
+
+git push
+   |
+   v
+Ubuntu 22.04 runner (32GB RAM, 8-core)
+   |
+   +---> Build (compile-only mode)
+   |
+   +---> MLIR lit tests (41 tests)
+   |
+   +---> Integration tests (18 tests)
+   |
+   +---> Example tests (22 tests)
+   |
+   +---> Model zoo (9 models)
+            |
+            v
+     All tests PASS?
+       |        |
+      YES       NO
+       |        |
+       v        v
+  Tag release  Fail build
+  (v3.0.0)    (email notify)
+\end{verbatim}
+
+\begin{notebox}[Validation Environment]
+Validation runs on Ubuntu 22.04 LTS with 32GB RAM, 8-core CPU, and 100GB disk space. Spike simulator is installed under ~/riscv-gemmini.
+\end{notebox}
+
+\section*{Revision History}
+
+\begin{tabular}{|p{0.2\textwidth}|p{0.2\textwidth}|p{0.2\textwidth}|p{0.35\textwidth}|}
+\hline
+\textbf{Version} & \textbf{Date} & \textbf{Author} & \textbf{Changes} \\
+\hline
+1.0 & 2026-05-21 & SST Team & Initial reference manual \\
+\hline
+2.0 & 2026-05-22 & SST Team & Added FP16, batched MatMul, simulator validation \\
+\hline
+2.1 & 2026-05-22 & SST Team & Alignment status, test results, runtime verification \\
+\hline
+3.0 & 2026-06-08 & SST Team & Comprehensive edition with Quick Start, Performance Characterization, troubleshooting, extended glossary \\
+\hline
+3.1 & \today & SST Team & CORRECTED: Hardware parameters (scratchpad rows: 16,384, 256 KB; accumulator rows: 1,024, 64 KB); Double-buffering slot addresses as relative ranges; RoCC sequence includes FENCE (10 steps, 454 cycles); Lit test table corrected (direct\_matmul\_i8\_rocc.mlir, convtranspose\_gemmini.mlir added; INT8 zero-point tests noted as integration coverage); Common Issues table updated (16,384 rows); Warning-box title corrected (Seven Correctness Invariants); CMake lit target name corrected (check-onnx\_mlir-accelerators-gemmini); CUSTOM\_0 troubleshooting entry updated with opcode fix guidance. \\
+\hline
+\end{tabular}
+
+\vspace{1cm}
+
+\noindent\textbf{Prepared by:} SST Team, SiliconeSignal Technologies \\
+\noindent\textbf{Location:} Meknes, Morocco \\
+\noindent\textbf{Document Status:} Final \\
+\noindent\textbf{Approval:} Pending
+
+\end{document}

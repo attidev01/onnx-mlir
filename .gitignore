@@ -201,18 +201,22 @@ compile_commands.json
 /src/**/Makefile
 
 # Gemmini dev workspace (untracked, not part of onnx-mlir proper)
-gemmini/
-gemmini_scala/
-Gemmini_Docs/
-models/
+/gemmini/
+/gemmini_scala/
+/Gemmini_Docs/
+/models/
 
 # Local build trees and generated outputs
-gemmini_toolchain_build/
+/gemmini_toolchain_build/
 llvm-project/build-x86/
-build_rv64/
-build_test/
+/build_rv64/
+/build_test/
 test/accelerators/gemmini/integration/Output/
 test/accelerators/gemmini/.lit_test_times.txt
+docs/gemmini/*.aux
+docs/gemmini/*.log
+docs/gemmini/*.out
+docs/gemmini/*.toc
 
 # Gemmini runtime/test build products
 rt_obj/
