@@ -4,11 +4,13 @@
 
 //===------------------------ GemminiTargetInfo.hpp ----------------------===//
 //
-// Centralized target-parameter helpers for the Gemmini backend.
+// Generated compiler-side target-parameter helpers for the Gemmini backend.
 //
-// The current backend previously duplicated or documented stale target values
-// in several files. This support helper gives the refactored pipeline a single
-// source of truth for the checked-in Gemmini profile used by this repository.
+// This file is configured by Support/CMakeLists.txt from:
+//   Runtime/gemmini-hardware-abi/include/gemmini_params.h
+//
+// Do not edit the generated copy in the build tree. Update gemmini_params.h or
+// this template instead.
 //
 //===----------------------------------------------------------------------===//
 
@@ -21,12 +23,12 @@ namespace onnx_mlir {
 namespace gemmini {
 
 struct GemminiTargetInfo {
-  static constexpr int64_t dim = 16;
-  static constexpr int64_t bankNum = 4;
-  static constexpr int64_t bankRows = 4096;  // BANK_ROWS in gemmini_params.h
-  static constexpr int64_t accRows  = 1024;  // ACC_ROWS  in gemmini_params.h
-  static constexpr int64_t elemBits = 8;
-  static constexpr int64_t accBits = 32;
+  static constexpr int64_t dim = @GEMMINI_TARGET_DIM@;
+  static constexpr int64_t bankNum = @GEMMINI_TARGET_BANK_NUM@;
+  static constexpr int64_t bankRows = @GEMMINI_TARGET_BANK_ROWS@;
+  static constexpr int64_t accRows = @GEMMINI_TARGET_ACC_ROWS@;
+  static constexpr int64_t elemBits = @GEMMINI_TARGET_ELEM_BITS@;
+  static constexpr int64_t accBits = @GEMMINI_TARGET_ACC_BITS@;
 
   static constexpr int64_t scratchpadRows() { return bankNum * bankRows; }
   static constexpr int64_t scratchpadMatrices() {

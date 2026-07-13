@@ -4,24 +4,28 @@ Two files define the physical constants of the Gemmini chip:
 
 | File | Purpose |
 |------|---------|
-| `Runtime/gemmini_params.hpp` | Raw chip constants (used by runtime C code) |
-| `Support/GemminiTargetInfo.hpp` | Compiler-visible wrapper (used by compiler passes) |
+| `Runtime/gemmini-hardware-abi/include/gemmini_params.h` | Raw chip constants (used by runtime C code) |
+| `Support/GemminiTargetInfo.hpp.in` | Template for the compiler-visible wrapper |
+| generated `Support/GemminiTargetInfo.hpp` | Build-tree header used by compiler passes |
 
 ---
 
 ## Why Two Files?
 
-`gemmini_params.hpp` is written in C-style (macros, typedefs) so it can
+`gemmini_params.h` is written in C-style (macros, typedefs) so it can
 be included in the RISC-V runtime library compiled with a C compiler.
 
-`GemminiTargetInfo.hpp` wraps the same numbers in a modern C++ struct with
-helper methods, so the compiler passes can use them cleanly.
+During CMake configuration, `Support/CMakeLists.txt` reads `gemmini_params.h`
+and configures `GemminiTargetInfo.hpp` from `GemminiTargetInfo.hpp.in`. The
+generated header wraps the same numbers in a modern C++ struct with helper
+methods, so the compiler passes can use them cleanly.
 
-Both files describe **the same physical chip**. They must stay in sync.
+The runtime ABI header is the source of truth; the compiler header is generated
+from it so both sides describe **the same physical chip**.
 
 ---
 
-## `gemmini_params.hpp` — Full Reference
+## `gemmini_params.h` — Full Reference
 
 ### RoCC Instruction Constants
 
@@ -149,9 +153,9 @@ improving bandwidth.
 
 ---
 
-## `GemminiTargetInfo.hpp` — Full Reference
+## Generated `GemminiTargetInfo.hpp` — Full Reference
 
-This struct wraps the same constants in a C++ interface for use in
+This generated struct wraps the same constants in a C++ interface for use in
 the compiler passes.
 
 ```cpp

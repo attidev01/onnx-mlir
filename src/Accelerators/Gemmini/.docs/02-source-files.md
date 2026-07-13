@@ -276,11 +276,13 @@ merges adjacent operations, and removes no-op sequences.
 
 ## `Support/`
 
-### `GemminiTargetInfo.hpp` / `GemminiTargetInfo.cpp`
+### `GemminiTargetInfo.hpp.in` / `GemminiTargetInfo.cpp`
 
-**Role:** Single source of truth for all hardware constants used during
-compilation. All passes that need to know the tile size or memory layout
-read from this struct.
+**Role:** Compiler-side view of the hardware constants used during
+compilation. `GemminiTargetInfo.hpp.in` is the source-tree template;
+CMake reads `Runtime/gemmini-hardware-abi/include/gemmini_params.h` and
+generates `GemminiTargetInfo.hpp` in the build tree. All passes that need to
+know the tile size or memory layout read from the generated struct.
 
 | Constant | Value | Meaning |
 |----------|-------|---------|

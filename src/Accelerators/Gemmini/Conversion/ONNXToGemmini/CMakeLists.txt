@@ -22,6 +22,7 @@ add_onnx_mlir_library(OMONNXToGemmini
 
   LINK_LIBS PUBLIC
     OMGemminiOps
+    OMGemminiSupport
     OMONNXOps
     OMONNXToKrnl
     MLIRIR

@@ -16,9 +16,9 @@ add_onnx_mlir_library(OMGemminiCompilerUtils
 
   INCLUDE_DIRS PUBLIC
     ${GEMMINI_SRC_ROOT}
-    ${GEMMINI_BIN_ROOT}
     ${ONNX_MLIR_SRC_ROOT}
     ${ONNX_MLIR_BIN_ROOT}
+    ${GEMMINI_BIN_ROOT}
 
   LINK_LIBS PUBLIC
     OMONNXToGemmini

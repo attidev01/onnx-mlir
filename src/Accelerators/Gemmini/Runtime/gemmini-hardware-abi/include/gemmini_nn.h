@@ -17,12 +17,13 @@
 #ifndef BAREMETAL
 #include <sys/mman.h>
 #endif
-#include "include/gemmini.h"
-#include "include/gemmini_testutils.h"
+#include "gemmini.h"
+#include "gemmini_testutils.h"
 
 // Convolution layer metadata and derived GEMM dimensions.
 // I/J/K are the lowered matrix dimensions used after im2col-style packing.
 struct ConvParams {
+    // Input/output tensor dimensions.
     int batch_size;
     int in_row_dim;
     int in_col_dim;
@@ -31,30 +32,39 @@ struct ConvParams {
     int kernel_size;
     int in_channels;
     int out_channels;
+    // Physical row strides for input, weights, and output buffers.
     int in_stride;
     int weight_stride;
     int out_stride;
+    // Convolution attributes.
     int stride;
     int padding;
     bool bias;
     bool depthwise;
+    // Patch/im2col metadata used by helper paths.
     int n_patches;
     int patch_size;
+    // Quantization scales used by output and residual-add paths.
     acc_scale_t output_scale;
     scale_t res_scale;
+    // Optional max-pooling attributes and resulting pooled output dimension.
     int pool_size, pool_stride, pool_padding, out_dim_pooled;
-    
+
+    // GEMM dimensions after lowering convolution to matrix multiplication.
     int I, J, K;
 };
 
 // Fully connected layer metadata and derived GEMM dimensions.
 struct FcParams {
+    // Logical layer dimensions.
     int batch_size;
     int in_features;
     int out_features;
+    // Quantized output scale and optional bias flag.
     acc_scale_t output_scale;
     bool bias;
 
+    // GEMM dimensions for the lowered fully connected layer.
     int I, J, K;
 };
 
@@ -394,7 +404,7 @@ static void im2col_with_col2im(size_t prev_I, size_t prev_J,
     }
 }
 
-// Compute C = A + B with saturating add
+// Compute C = scale(A) + B with elem_t saturation.
 void vecadd(size_t len, const elem_t * A, const elem_t * B, elem_t * C, scale_t A_shift) {
     for (size_t i = 0; i < len; i++) {
         acc_t result = MVIN_SCALE(A[i], A_shift) + B[i];
@@ -409,6 +419,9 @@ void vecadd(size_t len, const elem_t * A, const elem_t * B, elem_t * C, scale_t 
     }
 }
 
+// Residual add for NHWC tensors stored as 4-D arrays.
+// Applies params->res_scale to A, adds B, saturates, and optionally clamps
+// negative outputs to zero for ReLU-style residual blocks.
 void resadd1(const size_t batch_size, const size_t channels, const size_t im_dim,
     const elem_t A[batch_size][im_dim][im_dim][channels],
     const elem_t B[batch_size][im_dim][im_dim][channels],
@@ -437,6 +450,8 @@ void resadd1(const size_t batch_size, const size_t channels, const size_t im_dim
     }
 }
 
+// Residual add where A is already flattened as [I][J] and B/C remain NHWC.
+// The flattened row index matches batch/out_row/out_col in pooled output space.
 void resadd2(const size_t I, const size_t J,
     const size_t batch_size, const size_t channels, const size_t im_dim,
     const elem_t A[I][J],
@@ -468,6 +483,7 @@ void resadd2(const size_t I, const size_t J,
     }
 }
 
+// Residual add where both inputs and the output use flattened [I][J] layout.
 void resadd3(const size_t I, const size_t J,
     const elem_t A[I][J],
     const elem_t B[I][J],
@@ -498,7 +514,7 @@ void resadd3(const size_t I, const size_t J,
     }
 }
 
-// Pooling
+// MaxPool over NHWC tensors using the pooling parameters in ConvParams.
 void pool(size_t batch_size, size_t channels, size_t in_row_dim, size_t in_col_dim,
     size_t out_row_dim, size_t out_col_dim,
     elem_t input[batch_size][in_row_dim][in_col_dim][channels],
@@ -543,6 +559,8 @@ void pool(size_t batch_size, size_t channels, size_t in_row_dim, size_t in_col_d
     }
 }
 
+// MaxPool when the input is a flattened col2im-style [I][J] matrix and the
+// output is restored to NHWC layout.
 void pool_with_col2im(size_t I, size_t J,
     size_t batch_size, size_t channels, size_t out_row_dim, size_t out_col_dim,
     elem_t input[I][J],

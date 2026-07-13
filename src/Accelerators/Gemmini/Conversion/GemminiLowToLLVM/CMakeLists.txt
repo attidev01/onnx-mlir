@@ -7,6 +7,7 @@ add_onnx_mlir_library(OMGemminiLowToLLVM
 
   LINK_LIBS PUBLIC
     OMGemminiLowOps
+    OMGemminiSupport
     OMKrnlToLLVM
     MLIRIR
     MLIRPass

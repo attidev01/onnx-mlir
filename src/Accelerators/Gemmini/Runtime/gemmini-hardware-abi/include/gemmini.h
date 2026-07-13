@@ -31,7 +31,7 @@
 #include "rocc-software/src/xcustom.h"
 
 // Counter Definition
-#include "include/gemmini_counter.h"
+#include "gemmini_counter.h"
 
 #ifndef EXPOSE_TOP_LEVEL_FNS
 #define _STATIC static
@@ -91,6 +91,7 @@
 #define SOFTMAX 4
 
 #ifdef ELEM_T_IS_FLOAT
+// Reinterpret raw elem_t bits as an elem_t floating-point value.
 static elem_t elem_t_bits_to_elem_t(elem_t_bits x) {
     union {
         elem_t_bits b;
@@ -101,6 +102,7 @@ static elem_t elem_t_bits_to_elem_t(elem_t_bits x) {
     return un.f;
 }
 
+// Reinterpret an elem_t floating-point value as its raw bit pattern.
 static elem_t_bits elem_t_to_elem_t_bits(elem_t x) {
     union {
         elem_t_bits b;
@@ -111,6 +113,7 @@ static elem_t_bits elem_t_to_elem_t_bits(elem_t x) {
     return un.b;
 }
 
+// Reinterpret raw accumulator bits as an acc_t floating-point value.
 static acc_t acc_t_bits_to_acc_t(acc_t_bits x) {
     union {
         acc_t_bits b;
@@ -121,6 +124,7 @@ static acc_t acc_t_bits_to_acc_t(acc_t_bits x) {
     return un.f;
 }
 
+// Reinterpret an acc_t floating-point value as its raw bit pattern.
 static acc_t_bits acc_t_to_acc_t_bits(acc_t x) {
     union {
         acc_t_bits b;
@@ -131,6 +135,7 @@ static acc_t_bits acc_t_to_acc_t_bits(acc_t x) {
     return un.b;
 }
 
+// Detect NaN for elem_t without depending on libm classification helpers.
 static bool elem_t_isnan(elem_t x) {
     elem_t_bits bits = elem_t_to_elem_t_bits(x);
     uint64_t exp = (bits >> (ELEM_T_SIG_BITS-1)) & (((uint64_t)1 << ELEM_T_EXP_BITS) - 1);
@@ -140,6 +145,7 @@ static bool elem_t_isnan(elem_t x) {
     return is_nan_or_inf && is_not_inf;
 }
 
+// Detect NaN for acc_t without depending on libm classification helpers.
 static bool acc_t_isnan(acc_t x) {
     acc_t_bits bits = acc_t_to_acc_t_bits(x);
     uint64_t exp = (bits >> (ACC_T_SIG_BITS-1)) & (((uint64_t)1 << ACC_T_EXP_BITS) - 1);
@@ -176,6 +182,7 @@ static scale_t_bits scale_t_to_scale_t_bits(scale_t x) {
 #endif
 
 #ifdef HAS_MVIN_ACC_SCALE
+// Convert accumulator-load scale values to/from command bit patterns.
 static scale_acc_t scale_acc_t_bits_to_scale_acc_t(scale_acc_t_bits x) {
     union {
         scale_acc_t_bits b;
@@ -1294,19 +1301,23 @@ _STATIC void tiled_matmul_auto(size_t dim_I, size_t dim_J, size_t dim_K,
         uint8_t weightA,
         enum tiled_matmul_type_t tiled_matmul_type) {
 
+// Initial tile estimates for single-buffered matmul.
 #define partition_rows (BANK_NUM * BANK_ROWS / 2)
 #define mats_in_partition (partition_rows / DIM)
 #define mats_in_acc (ACC_ROWS / DIM)
 #define max_tile_i_j ((size_t)sqrt(mats_in_acc))
 #define max_tile_k (mats_in_partition / max_tile_i_j)
 
-    // "db_" means "double-buffered"
+    // Initial tile estimates for double-buffered weight-stationary matmul.
+    // "db_" means "double-buffered".
 #define db_partition_rows ((BANK_NUM * BANK_ROWS / 2) / 2)
 #define db_mats_in_partition (db_partition_rows / DIM)
 #define db_mats_in_acc ((ACC_ROWS / 2) / DIM)
 #define db_max_tile_i_j ((size_t)sqrt(db_mats_in_acc))
 #define db_max_tile_k (db_mats_in_partition / db_max_tile_i_j)
 
+    // Hardware tiles are whole DIM x DIM blocks, so round logical dimensions
+    // up and track the final-tile padding separately in tiled_matmul_outer.
     const size_t dim_I_padded = (dim_I / DIM + (dim_I % DIM != 0)) * DIM;
     const size_t dim_J_padded = (dim_J / DIM + (dim_J % DIM != 0)) * DIM;
     const size_t dim_K_padded = (dim_K / DIM + (dim_K % DIM != 0)) * DIM;
@@ -1319,6 +1330,8 @@ _STATIC void tiled_matmul_auto(size_t dim_I, size_t dim_J, size_t dim_K,
 
     size_t tile_I, tile_J, tile_K;
 
+    // LayerNorm/Softmax need a whole row's J dimension resident so the
+    // normalizer can compute row statistics.
     if (act == LAYERNORM || act == SOFTMAX) {
        tile_I = 1;
        tile_J = dim_J_padded/DIM;
@@ -1333,7 +1346,9 @@ _STATIC void tiled_matmul_auto(size_t dim_I, size_t dim_J, size_t dim_K,
        tile_K = dim_K_padded/DIM < max_tile_k ? dim_K_padded/DIM : max_tile_k;
     }
 
-    // Fill scratchpad as much as possible
+    // Greedily expand I/J/K while staying within scratchpad and accumulator
+    // row limits.  This keeps the generated tile simple and portable across
+    // hardware profiles without requiring an external scheduler.
     while (true) {
       bool increased = false;
 

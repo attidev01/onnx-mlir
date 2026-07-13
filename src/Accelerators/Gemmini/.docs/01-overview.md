@@ -121,13 +121,14 @@ src/Accelerators/Gemmini/
 │   ├── Gemmini/                    ← tiling pass
 │   └── GemminiLow/                 ← low-level rewrites + scratchpad alloc
 ├── Support/
-│   └── GemminiTargetInfo.hpp/cpp   ← hardware constants helper
+│   ├── GemminiTargetInfo.hpp.in    ← template for generated target info
+│   └── GemminiTargetInfo.cpp       ← support-library translation unit
 ├── Pass/
 │   └── GemminiPasses.hpp           ← pass factory declarations
 └── Runtime/
     ├── OMRuntimeGemmini.hpp/cpp    ← om_gemmini_* function declarations/impl
-    ├── gemmini.hpp                 ← hardware abstraction layer
-    └── gemmini_params.hpp          ← chip constant definitions
+    └── gemmini-hardware-abi/
+        └── include/gemmini_params.h ← chip constant definitions
 ```
 
 ---

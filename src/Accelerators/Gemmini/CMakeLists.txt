@@ -29,8 +29,8 @@ set(GEMMINI_BUILD_MODE "${ONNX_MLIR_GEMMINI_MODE}")
 
 add_subdirectory(Compiler)
 add_subdirectory(Dialect)
-add_subdirectory(Conversion)
 add_subdirectory(Support)
+add_subdirectory(Conversion)
 add_subdirectory(Transform)
 add_subdirectory(Runtime)
 
@@ -45,6 +45,7 @@ add_onnx_mlir_library(OMGemminiAccel
   INCLUDE_DIRS PUBLIC
     ${ONNX_MLIR_SRC_ROOT}/include
     ${ONNX_MLIR_SRC_ROOT}
+    ${ONNX_MLIR_BIN_ROOT}
     ${GEMMINI_SRC_ROOT}
     ${GEMMINI_BIN_ROOT}
 

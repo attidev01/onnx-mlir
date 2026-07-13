@@ -14,7 +14,7 @@ Gemmini backend in `src/Accelerators/Gemmini/`.
 | [03-compiler-pipeline.md](03-compiler-pipeline.md) | The 6 compiler passes explained step by step with before/after IR examples. |
 | [04-dialects.md](04-dialects.md) | The `gemmini` and `gemmini_low` MLIR dialects: all 4 ops each, their arguments and side effects. |
 | [05-runtime-functions.md](05-runtime-functions.md) | All 33 `om_gemmini_*` runtime functions: signature, role, simple example, and quick-reference table. |
-| [06-hardware-parameters.md](06-hardware-parameters.md) | Every constant in `gemmini_params.hpp` and `GemminiTargetInfo.hpp` with meaning and simple examples. |
+| [06-hardware-parameters.md](06-hardware-parameters.md) | Every constant in `gemmini_params.h` and generated `GemminiTargetInfo.hpp` with meaning and simple examples. |
 
 ---
 
@@ -37,8 +37,8 @@ onnx.MatMul
 | Function / type | File |
 |----------------|------|
 | `om_gemmini_conv_f32_bias` | `Runtime/OMRuntimeGemmini.hpp` (decl), `Runtime/OMRuntimeGemmini.cpp` (impl) |
-| `GemminiTargetInfo::dim` | `Support/GemminiTargetInfo.hpp` |
-| `DIM`, `BANK_ROWS`, `elem_t` | `Runtime/gemmini_params.hpp` |
+| `GemminiTargetInfo::dim` | generated `Support/GemminiTargetInfo.hpp` from `Support/GemminiTargetInfo.hpp.in` |
+| `DIM`, `BANK_ROWS`, `elem_t` | `Runtime/gemmini-hardware-abi/include/gemmini_params.h` |
 | `gemmini.mvin` op | `Dialect/Gemmini/GemminiOps.td` + `GemminiOps.hpp/cpp` |
 | `gemmini_low.mvin` op | `Dialect/GemminiLow/GemminiLowOps.td` + `GemminiLowOps.hpp/cpp` |
 | Pass factories | `Pass/GemminiPasses.hpp` |
