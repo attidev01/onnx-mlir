@@ -33,12 +33,17 @@
 // Counter Definition
 #include "gemmini_counter.h"
 
+// Function linkage switch:
+//   - default: helper entry points stay static to avoid exporting every symbol
+//   - EXPOSE_TOP_LEVEL_FNS: selected top-level helpers become externally visible
 #ifndef EXPOSE_TOP_LEVEL_FNS
 #define _STATIC static
 #else
 #define _STATIC
 #endif
 
+// RoCC funct values.  Each value selects one Gemmini command decoder path in
+// the accelerator when passed through CUSTOM_3.
 #define k_CONFIG 0
 #define k_MVIN2 1
 #define k_MVIN 2
@@ -79,7 +84,11 @@
 #define CONFIG_ST 2
 #define CONFIG_BERT 3
 
+// Sentinel scratchpad address used when a command operand is intentionally
+// unused, for example when preloading no matrix.
 #define GARBAGE_ADDR ((uint32_t)(-1))
+
+// Gemmini dataflow modes.
 #define OUTPUT_STATIONARY 0
 #define WEIGHT_STATIONARY 1
 
@@ -94,8 +103,8 @@
 // Reinterpret raw elem_t bits as an elem_t floating-point value.
 static elem_t elem_t_bits_to_elem_t(elem_t_bits x) {
     union {
-        elem_t_bits b;
-        elem_t f;
+        elem_t_bits b; // Integer bit pattern received from the command stream.
+        elem_t f;      // Floating-point view of the same bits.
     } un;
 
     un.b = x;
@@ -105,8 +114,8 @@ static elem_t elem_t_bits_to_elem_t(elem_t_bits x) {
 // Reinterpret an elem_t floating-point value as its raw bit pattern.
 static elem_t_bits elem_t_to_elem_t_bits(elem_t x) {
     union {
-        elem_t_bits b;
-        elem_t f;
+        elem_t_bits b; // Integer bit pattern written into command fields.
+        elem_t f;      // Floating-point source value.
     } un;
 
     un.f = x;
@@ -116,8 +125,8 @@ static elem_t_bits elem_t_to_elem_t_bits(elem_t x) {
 // Reinterpret raw accumulator bits as an acc_t floating-point value.
 static acc_t acc_t_bits_to_acc_t(acc_t_bits x) {
     union {
-        acc_t_bits b;
-        acc_t f;
+        acc_t_bits b; // Integer bit pattern received from the command stream.
+        acc_t f;      // Accumulator floating-point view.
     } un;
 
     un.b = x;
@@ -127,8 +136,8 @@ static acc_t acc_t_bits_to_acc_t(acc_t_bits x) {
 // Reinterpret an acc_t floating-point value as its raw bit pattern.
 static acc_t_bits acc_t_to_acc_t_bits(acc_t x) {
     union {
-        acc_t_bits b;
-        acc_t f;
+        acc_t_bits b; // Integer bit pattern written into command fields.
+        acc_t f;      // Accumulator floating-point source value.
     } un;
 
     un.f = x;
@@ -137,21 +146,21 @@ static acc_t_bits acc_t_to_acc_t_bits(acc_t x) {
 
 // Detect NaN for elem_t without depending on libm classification helpers.
 static bool elem_t_isnan(elem_t x) {
-    elem_t_bits bits = elem_t_to_elem_t_bits(x);
-    uint64_t exp = (bits >> (ELEM_T_SIG_BITS-1)) & (((uint64_t)1 << ELEM_T_EXP_BITS) - 1);
-    uint64_t sig = bits & (((uint64_t)1 << ELEM_T_SIG_BITS) - 1);
-    bool is_nan_or_inf = exp == (((uint64_t)1 << ELEM_T_EXP_BITS) - 1);
-    bool is_not_inf = sig != 0;
+    elem_t_bits bits = elem_t_to_elem_t_bits(x); // Raw IEEE-like encoding.
+    uint64_t exp = (bits >> (ELEM_T_SIG_BITS-1)) & (((uint64_t)1 << ELEM_T_EXP_BITS) - 1); // Exponent field.
+    uint64_t sig = bits & (((uint64_t)1 << ELEM_T_SIG_BITS) - 1); // Significand field.
+    bool is_nan_or_inf = exp == (((uint64_t)1 << ELEM_T_EXP_BITS) - 1); // All-ones exponent.
+    bool is_not_inf = sig != 0; // Non-zero significand distinguishes NaN from infinity.
     return is_nan_or_inf && is_not_inf;
 }
 
 // Detect NaN for acc_t without depending on libm classification helpers.
 static bool acc_t_isnan(acc_t x) {
-    acc_t_bits bits = acc_t_to_acc_t_bits(x);
-    uint64_t exp = (bits >> (ACC_T_SIG_BITS-1)) & (((uint64_t)1 << ACC_T_EXP_BITS) - 1);
-    uint64_t sig = bits & (((uint64_t)1 << ACC_T_SIG_BITS) - 1);
-    bool is_nan_or_inf = exp == (((uint64_t)1 << ACC_T_EXP_BITS) - 1);
-    bool is_not_inf = sig != 0;
+    acc_t_bits bits = acc_t_to_acc_t_bits(x); // Raw IEEE-like encoding.
+    uint64_t exp = (bits >> (ACC_T_SIG_BITS-1)) & (((uint64_t)1 << ACC_T_EXP_BITS) - 1); // Exponent field.
+    uint64_t sig = bits & (((uint64_t)1 << ACC_T_SIG_BITS) - 1); // Significand field.
+    bool is_nan_or_inf = exp == (((uint64_t)1 << ACC_T_EXP_BITS) - 1); // All-ones exponent.
+    bool is_not_inf = sig != 0; // Non-zero significand distinguishes NaN from infinity.
     return is_nan_or_inf && is_not_inf;
 }
 #endif
@@ -160,8 +169,8 @@ static bool acc_t_isnan(acc_t x) {
 // Convert between a scale value and the bit pattern packed into RoCC commands.
 static scale_t scale_t_bits_to_scale_t(scale_t_bits x) {
     union {
-        scale_t_bits b;
-        scale_t f;
+        scale_t_bits b; // Packed scale bits from a RoCC command field.
+        scale_t f;      // Floating-point or fixed-point scale view.
     } un;
 
     un.b = x;
@@ -170,8 +179,8 @@ static scale_t scale_t_bits_to_scale_t(scale_t_bits x) {
 
 static scale_t_bits scale_t_to_scale_t_bits(scale_t x) {
     union {
-        scale_t_bits b;
-        scale_t f;
+        scale_t_bits b; // Packed scale bits for a RoCC command field.
+        scale_t f;      // Scale value requested by software.
     } un;
 
     un.f = x;
@@ -185,8 +194,8 @@ static scale_t_bits scale_t_to_scale_t_bits(scale_t x) {
 // Convert accumulator-load scale values to/from command bit patterns.
 static scale_acc_t scale_acc_t_bits_to_scale_acc_t(scale_acc_t_bits x) {
     union {
-        scale_acc_t_bits b;
-        scale_acc_t f;
+        scale_acc_t_bits b; // Packed accumulator-load scale bits.
+        scale_acc_t f;      // Accumulator-load scale value.
     } un;
 
     un.b = x;
@@ -195,8 +204,8 @@ static scale_acc_t scale_acc_t_bits_to_scale_acc_t(scale_acc_t_bits x) {
 
 static scale_acc_t_bits scale_acc_t_to_scale_acc_t_bits(scale_acc_t x) {
     union {
-        scale_acc_t_bits b;
-        scale_acc_t f;
+        scale_acc_t_bits b; // Packed accumulator-load scale bits.
+        scale_acc_t f;      // Accumulator-load scale value.
     } un;
 
     un.f = x;
@@ -207,8 +216,8 @@ static scale_acc_t_bits scale_acc_t_to_scale_acc_t_bits(scale_acc_t x) {
 // Convert accumulator-output scale values to/from command bit patterns.
 static acc_scale_t acc_scale_t_bits_to_acc_scale_t(acc_scale_t_bits x) {
     union {
-        acc_scale_t_bits b;
-        acc_scale_t f;
+        acc_scale_t_bits b; // Packed accumulator-output scale bits.
+        acc_scale_t f;      // Accumulator-output scale value.
     } un;
 
     un.b = x;
@@ -217,8 +226,8 @@ static acc_scale_t acc_scale_t_bits_to_acc_scale_t(acc_scale_t_bits x) {
 
 static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
     union {
-        acc_scale_t_bits b;
-        acc_scale_t f;
+        acc_scale_t_bits b; // Packed accumulator-output scale bits.
+        acc_scale_t f;      // Accumulator-output scale value.
     } un;
 
     un.f = x;
@@ -231,6 +240,9 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 // ===--- Raw Gemmini movement/compute/config commands ---===
 
 // Move data from DRAM to scratchpad or accumulator memory.
+//   dram_addr: source pointer in host/DRAM address space
+//   spad_addr: destination row in Gemmini scratchpad or accumulator space
+//   cols/rows: visible tile shape, excluding right/bottom padding
 #define gemmini_extended_mvin(dram_addr, spad_addr, cols, rows) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, dram_addr, ((uint64_t)(rows) << (ADDR_LEN + 16)) | ((uint64_t)(cols) << ADDR_LEN) | (spad_addr), k_MVIN)
 
@@ -247,6 +259,9 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
   gemmini_extended_mvin(dram_addr, spad_addr, DIM, DIM)
 
 // Move data from Gemmini scratchpad/accumulator memory back to DRAM.
+//   dram_addr: destination pointer in host/DRAM address space
+//   spad_addr: source row in Gemmini scratchpad or accumulator space
+//   cols/rows: visible tile shape, excluding right/bottom padding
 #define gemmini_extended_mvout(dram_addr, spad_addr, cols, rows) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, dram_addr, ((uint64_t)(rows) << (ADDR_LEN + 16)) | ((uint64_t)(cols) << ADDR_LEN) | (uint64_t)(spad_addr), k_MVOUT)
 
@@ -260,6 +275,9 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
   gemmini_extended_mvout(dram_addr, spad_addr, DIM, DIM)
 
 // Execute one systolic-array compute step using preloaded or accumulated data.
+//   A: scratchpad row for the left/input tile
+//   BD: scratchpad row for B or accumulator row for D/C, depending on command
+//   *_cols/*_rows: visible tile shape, excluding padded edge elements
 #define gemmini_extended_compute_preloaded(A, BD, A_cols, A_rows, BD_cols, BD_rows) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)(A_rows) << (ADDR_LEN + 16)) | ((uint64_t)(A_cols) << ADDR_LEN) | (uint64_t)(A), ((uint64_t)(BD_rows) << (ADDR_LEN + 16)) | ((uint64_t)(BD_cols) << ADDR_LEN) | (uint64_t)(BD), k_COMPUTE_PRELOADED)
 
@@ -273,6 +291,9 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
   gemmini_extended_compute_accumulated(A, BD, DIM, DIM, DIM, DIM)
 
 // Preload B/D and output C accumulator addresses for a following compute.
+//   BD: scratchpad/accumulator source for weights or bias
+//   C: accumulator destination row for the next output tile
+//   *_cols/*_rows: visible source/destination shapes
 #define gemmini_extended_preload(BD, C, BD_cols, BD_rows, C_cols, C_rows) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)(BD_rows) << (ADDR_LEN + 16)) | ((uint64_t)(BD_cols) << ADDR_LEN) | (uint64_t)(BD), ((uint64_t)(C_rows) << (ADDR_LEN + 16)) | ((uint64_t)(C_cols) << ADDR_LEN) | (uint64_t)(C), k_PRELOAD)
 
@@ -283,6 +304,12 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
   gemmini_preload(GARBAGE_ADDR, C)
 
 // Configure execute/load/store/normalization units.
+// Execute config fields:
+//   dataflow: OUTPUT_STATIONARY or WEIGHT_STATIONARY
+//   sys_act/sys_shift/sys_acc_scale: activation and accumulator scaling
+//   C_stride/A_stride: row strides used by execute hardware
+//   A_transpose/B_transpose: transpose flags consumed by hardware loops
+//   set_only_strides: update stride fields without changing all execute state
 #define gemmini_extended3_config_ex(dataflow, sys_act, sys_shift, sys_acc_scale, C_stride, A_stride, A_transpose, B_transpose, set_only_strides) \
     ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)acc_scale_t_to_acc_scale_t_bits((acc_scale_t)sys_acc_scale) << 32) | ((uint64_t)(A_stride) << 16) | (B_transpose << 9) | (A_transpose << 8) | ((set_only_strides) << 7) | ((sys_act) << 3) | ((dataflow) << 2) | CONFIG_EX, ((uint64_t)(C_stride) << 48) | (sys_shift), k_CONFIG); \
 
@@ -295,7 +322,13 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 #define gemmini_config_ex(dataflow, sys_act, sys_shift) \
     gemmini_extended_config_ex(dataflow, sys_act, sys_shift, 1, 0, 0)
 
-// Note: The "pixel_repeats" parameter below is still experimental, andthere is
+// Load config fields:
+//   stride: DRAM byte stride between source rows
+//   scale: optional mvin scale encoded for the load unit
+//   shrunk: true when loading narrow elem_t values into accumulator space
+//   block_mvin_stride: scratchpad stride used by block mvin
+//   id: load-controller slot (0=A, 1=B, 2=D/bias)
+// Note: The "pixel_repeats" parameter below is still experimental, and there is
 // a high chance that it will be removed in future releases.
 #define gemmini_extended5_config_ld(stride, scale, shrunk, block_mvin_stride, pixel_repeats, id) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)(scale_t_to_scale_t_bits(scale)) << 32) | ((uint64_t)(block_mvin_stride) << 16) | ((uint64_t)(pixel_repeats) << 8) | ((id) << 3) | ((shrunk) << 2) | CONFIG_LD, stride, k_CONFIG)
@@ -315,6 +348,10 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 #define gemmini_config_ld(stride) \
   gemmini_extended_config_ld(stride, MVIN_SCALE_IDENTITY)
 
+// Store config fields:
+//   stride: DRAM byte stride between destination rows
+//   acc_act/acc_scale: activation and scale applied while moving out
+//   pool_* and pad fields: optional pooling window shape for store hardware
 #define gemmini_extended2_config_st(stride, acc_act, acc_scale, pool_stride, pool_size, pool_out_dim, porows, pocols, orows, ocols, upad, lpad) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)(ocols) << 56) | ((uint64_t)(orows) << 48) | ((uint64_t)(pocols) << 40) | ((uint64_t)(porows) << 32) | ((uint64_t)(pool_out_dim) << 24) | ((uint64_t)(lpad) << 10) | ((uint64_t)(upad) << 8) | ((uint64_t)(pool_size) << 6) | ((uint64_t)(pool_stride) << 4) | ((uint64_t)(acc_act) << 2) | CONFIG_ST, ((uint64_t)acc_scale_t_to_acc_scale_t_bits((acc_scale_t)acc_scale) << 32) | ((uint32_t)stride), k_CONFIG)
 
@@ -324,6 +361,12 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 #define gemmini_config_st(stride) \
     gemmini_extended_config_st(stride, NO_ACTIVATION, ACC_SCALE_IDENTITY)
 
+// Normalization config fields:
+//   q_const/q_const_type: quantized constant and selector for softmax/IGELU
+//   set_stats_id_only: update only the stat-id selector
+//   act_msb: high activation bit used by BERT-style activation modes
+//   stat_id: normalization statistics lane
+//   igelu_qb/igelu_qc: polynomial constants for integer GELU/softmax paths
 #define gemmini_config_norm(q_const, q_const_type, set_stats_id_only, act_msb, stat_id, igelu_qb, igelu_qc) \
     ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, (((uint64_t) ((uint32_t) q_const)) << 32) | ((q_const_type & 1) << 18) | ((set_stats_id_only & 1) << 17) | ((act_msb & 1) << 16) | ((uint64_t)stat_id << 8) | CONFIG_BERT, ((uint64_t)((uint32_t)(igelu_qc)) << 32) | ((uint64_t)((uint32_t)(igelu_qb))), k_CONFIG)
 
@@ -343,47 +386,48 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 
 // Read one configured Gemmini counter.
 static uint32_t counter_read(size_t index) {
-  uint32_t config_reg = (index & 0x7) << 4;
-  uint32_t res;
+  uint32_t config_reg = (index & 0x7) << 4; // Encoded counter slot to read.
+  uint32_t res; // Counter value returned by the accelerator.
   gemmini_counter_access(res, config_reg);
   return res;
 }
 
 // Configure a Gemmini counter to observe a selected signal.
 static void counter_configure(size_t index, size_t counter_code) {
-  int non_incremental = counter_code > INCREMENTAL_COUNTERS;
+  int non_incremental = counter_code > INCREMENTAL_COUNTERS; // Select level-style vs incremental event.
   if (non_incremental) {
     counter_code -= INCREMENTAL_COUNTERS;
   }
 
-  uint32_t config_reg = (index & 0x7) << 4 | 0x8 | (counter_code & 0x3f) << 12 | non_incremental << 31;
-  uint32_t placeholder;
+  uint32_t config_reg = (index & 0x7) << 4 | 0x8 | (counter_code & 0x3f) << 12 | non_incremental << 31; // Packed counter configuration command.
+  uint32_t placeholder; // Destination register required by the RoCC macro.
   gemmini_counter_access(placeholder, config_reg);
 }
 
 // Latch current counter values into the snapshot registers.
 static void counter_snapshot_take() {
-  uint32_t config_reg = 0x4;
-  uint32_t placeholder;
+  uint32_t config_reg = 0x4; // Snapshot command bit.
+  uint32_t placeholder; // Destination register required by the RoCC macro.
   gemmini_counter_access(placeholder, config_reg);
 }
 
 // Reset the snapshot registers.
 static void counter_snapshot_reset() {
-  uint32_t config_reg = 0x2;
-  uint32_t placeholder;
+  uint32_t config_reg = 0x2; // Snapshot-reset command bit.
+  uint32_t placeholder; // Destination register required by the RoCC macro.
   gemmini_counter_access(placeholder, config_reg);
 }
 
 // Reset the counter module.
 static void counter_reset() {
-  uint32_t config_reg = 0x1;
-  uint32_t placeholder;
+  uint32_t config_reg = 0x1; // Counter-reset command bit.
+  uint32_t placeholder; // Destination register required by the RoCC macro.
   gemmini_counter_access(placeholder, config_reg);
 }
 
+// Integer ceil(a / b), with a minimum result of 1 for nonzero tile counts.
 static int ceil_divide_int(int a, int b){
-    int c = (a % b == 0) ? ((int)(a/b)) :(((int)(a/b)) + 1);
+    int c = (a % b == 0) ? ((int)(a/b)) :(((int)(a/b)) + 1); // Rounded-up quotient.
     if(a < b) c = 1;
     return c;
 }
@@ -429,6 +473,16 @@ static int ceil_divide_int(int a, int b){
 // ===--- Matrix multiplication helpers ---===
 
 // Software-managed output-stationary tiled matmul sequence.
+// Parameters:
+//   A/B/D/C: DRAM pointers for input, weight, bias/accumulator, and output
+//   *_scale_factor: optional load-time scaling for each source operand
+//   I/J/K: tile counts in DIM-sized blocks for M/N/K
+//   pad_I/pad_J/pad_K: invalid rows/cols in the final edge tile
+//   *_row_stride: DRAM row strides in elements
+//   *_transpose: operand layout flags
+//   full_C/low_D: accumulator precision and bias storage format selectors
+//   no_bias/repeating_bias: bias behavior for the D operand
+//   act: activation selector, a_spad_id/b_spad_id: hardware reuse slots
 static void sp_tiled_matmul_os(const elem_t * A, const elem_t * B, const void * D, void * C,
         scale_t A_scale_factor, scale_t B_scale_factor, scale_acc_t D_scale_factor,
         size_t I, size_t J, size_t K, size_t pad_I, size_t pad_J, size_t pad_K,
@@ -439,31 +493,31 @@ static void sp_tiled_matmul_os(const elem_t * A, const elem_t * B, const void * 
         int act,
         int a_spad_id, int b_spad_id) {
 
-  const uint32_t A_sp_addr_start = 0;
-  const uint32_t B_sp_addr_start = BANK_NUM * BANK_ROWS - K * J * DIM;
-  const uint32_t D_sp_addr_start = 1 << (ADDR_LEN-1);
-  const uint32_t C_sp_addr_start = (3 << (ADDR_LEN-2)) | (full_C << (ADDR_LEN-3));
+  const uint32_t A_sp_addr_start = 0; // Scratchpad base row for A tiles.
+  const uint32_t B_sp_addr_start = BANK_NUM * BANK_ROWS - K * J * DIM; // Scratchpad base row for B tiles, placed at the high end.
+  const uint32_t D_sp_addr_start = 1 << (ADDR_LEN-1); // Accumulator-space base row for D/bias tiles.
+  const uint32_t C_sp_addr_start = (3 << (ADDR_LEN-2)) | (full_C << (ADDR_LEN-3)); // Accumulator-space base row for C tiles.
 
-  const int A_blocks = K <= MAX_BLOCK_LEN ? K : MAX_BLOCK_LEN;
-  const int B_blocks = J <= MAX_BLOCK_LEN ? J : MAX_BLOCK_LEN;
-  const int D_blocks = J <= MAX_BLOCK_LEN_ACC ? J : MAX_BLOCK_LEN_ACC;
+  const int A_blocks = K <= MAX_BLOCK_LEN ? K : MAX_BLOCK_LEN; // Maximum K-blocks moved for A per mvin.
+  const int B_blocks = J <= MAX_BLOCK_LEN ? J : MAX_BLOCK_LEN; // Maximum J-blocks moved for B per mvin.
+  const int D_blocks = J <= MAX_BLOCK_LEN_ACC ? J : MAX_BLOCK_LEN_ACC; // Maximum J-blocks moved for D per accumulator mvin.
 
   // Move-in D
   if (D != NULL && !no_bias) {
-    const size_t D_stride = repeating_bias ? 0 : D_row_stride * sizeof(acc_t);
+    const size_t D_stride = repeating_bias ? 0 : D_row_stride * sizeof(acc_t); // Zero stride broadcasts one bias row.
     gemmini_extended_config_ld(D_stride, D_scale_factor);
 
     for (size_t i = 0; i < I; i++) {
       for (size_t j = 0; j < J; j += D_blocks) {
-        const size_t bias_row = repeating_bias ? 0 : i;
-        const acc_t * const D_dram_addr = (acc_t *)D + (bias_row * D_row_stride + j)*DIM;
+        const size_t bias_row = repeating_bias ? 0 : i; // Source row for bias D.
+        const acc_t * const D_dram_addr = (acc_t *)D + (bias_row * D_row_stride + j)*DIM; // DRAM address for this D tile.
 
-        const uint32_t D_sp_addr_acc = D_sp_addr_start + (i*J + j)*DIM;
+        const uint32_t D_sp_addr_acc = D_sp_addr_start + (i*J + j)*DIM; // Accumulator row for this D tile.
 
-        const size_t blocks = j + D_blocks <= J ? D_blocks : J-j;
+        const size_t blocks = j + D_blocks <= J ? D_blocks : J-j; // Number of D blocks in this mvin.
 
-        const size_t cols = blocks * DIM - (j + blocks >= J ? pad_J : 0);
-        const size_t rows = DIM - (i == I-1 ? pad_I : 0);
+        const size_t cols = blocks * DIM - (j + blocks >= J ? pad_J : 0); // Visible D columns.
+        const size_t rows = DIM - (i == I-1 ? pad_I : 0); // Visible D rows.
 
         gemmini_extended_mvin(D_dram_addr, D_sp_addr_acc, cols, rows);
       }
@@ -474,11 +528,11 @@ static void sp_tiled_matmul_os(const elem_t * A, const elem_t * B, const void * 
   gemmini_extended_config_ld(B_row_stride * sizeof(elem_t), B_scale_factor);
   for (size_t j = 0; j < J; j += B_blocks) {
     for (size_t k = 0; k < K; k++) {
-      const elem_t * const B_dram_addr = B + (k*B_row_stride + j)*DIM;
-      const uint32_t B_sp_addr = B_sp_addr_start + (k*J + j)*DIM;
-      const size_t blocks = j + B_blocks <= J ? B_blocks : J-j;
-      const size_t cols = blocks * DIM - (j + blocks >= J ? pad_J : 0);
-      const size_t rows = DIM - (k == K-1 ? pad_K : 0);
+      const elem_t * const B_dram_addr = B + (k*B_row_stride + j)*DIM; // DRAM address for this B tile.
+      const uint32_t B_sp_addr = B_sp_addr_start + (k*J + j)*DIM; // Scratchpad row for this B tile.
+      const size_t blocks = j + B_blocks <= J ? B_blocks : J-j; // Number of B blocks in this mvin.
+      const size_t cols = blocks * DIM - (j + blocks >= J ? pad_J : 0); // Visible B columns.
+      const size_t rows = DIM - (k == K-1 ? pad_K : 0); // Visible B rows.
       gemmini_extended_mvin(B_dram_addr, B_sp_addr, cols, rows);
     }
   }
@@ -487,39 +541,39 @@ static void sp_tiled_matmul_os(const elem_t * A, const elem_t * B, const void * 
   gemmini_extended_config_ld(A_row_stride * sizeof(elem_t), A_scale_factor);
   for (size_t i = 0; i < I; i++) {
     for (size_t k = 0; k < K; k += A_blocks) {
-      const elem_t * const A_dram_addr = A + (i*A_row_stride + k)*DIM;
-      const uint32_t A_sp_addr = A_sp_addr_start + (i*K + k)*DIM;
-      const size_t blocks = k + A_blocks <= K ? A_blocks : K-k;
-      const size_t cols = blocks * DIM - (k + blocks >= K ? pad_K : 0);
-      const size_t rows = DIM - (i == I-1 ? pad_I : 0);
+      const elem_t * const A_dram_addr = A + (i*A_row_stride + k)*DIM; // DRAM address for this A tile.
+      const uint32_t A_sp_addr = A_sp_addr_start + (i*K + k)*DIM; // Scratchpad row for this A tile.
+      const size_t blocks = k + A_blocks <= K ? A_blocks : K-k; // Number of A blocks in this mvin.
+      const size_t cols = blocks * DIM - (k + blocks >= K ? pad_K : 0); // Visible A columns.
+      const size_t rows = DIM - (i == I-1 ? pad_I : 0); // Visible A rows.
       gemmini_extended_mvin(A_dram_addr, A_sp_addr, cols, rows);
     }
   }
 
   for (size_t i = 0; i < I; i++) {
     for (size_t j = 0; j < J; j++) {
-      const uint32_t C_sp_addr = C_sp_addr_start + (i*J + j)*DIM;
+      const uint32_t C_sp_addr = C_sp_addr_start + (i*J + j)*DIM; // Accumulator row for output C tile.
 
       for (size_t k = 0; k < K; k++) {
 
-        const uint32_t A_sp_addr = A_sp_addr_start + (i*K + k)*DIM;
-        const uint32_t B_sp_addr = B_sp_addr_start + (k*J + j)*DIM;
+        const uint32_t A_sp_addr = A_sp_addr_start + (i*K + k)*DIM; // Scratchpad row for current A tile.
+        const uint32_t B_sp_addr = B_sp_addr_start + (k*J + j)*DIM; // Scratchpad row for current B tile.
 
-        uint32_t out_sp_addr = k == K-1 ? C_sp_addr : GARBAGE_ADDR;
+        uint32_t out_sp_addr = k == K-1 ? C_sp_addr : GARBAGE_ADDR; // Only the final K tile writes C.
 
         // If we're not using a bias, then we want to overwrite what's in the
         // accumulator, rather than writing over it
-        int no_bias_new_matrix = no_bias && D != NULL && k == K-1;
+        int no_bias_new_matrix = no_bias && D != NULL && k == K-1; // Clear accumulator instead of adding D.
         if (no_bias_new_matrix) {
           out_sp_addr &= ~(1 << (ADDR_LEN-2));
         }
 
-        const size_t A_cols = DIM - (k == K - 1 ? pad_K : 0);
-        const size_t A_rows = DIM - (i == I - 1 ? pad_I : 0);
-        const size_t B_cols = DIM - (j == J - 1 ? pad_J : 0);
-        const size_t B_rows = DIM - (k == K - 1 ? pad_K : 0);
-        const size_t C_cols = DIM - (j == J - 1 ? pad_J : 0);
-        const size_t C_rows = DIM - (i == I - 1 ? pad_I : 0);
+        const size_t A_cols = DIM - (k == K - 1 ? pad_K : 0); // Valid A columns.
+        const size_t A_rows = DIM - (i == I - 1 ? pad_I : 0); // Valid A rows.
+        const size_t B_cols = DIM - (j == J - 1 ? pad_J : 0); // Valid B columns.
+        const size_t B_rows = DIM - (k == K - 1 ? pad_K : 0); // Valid B rows.
+        const size_t C_cols = DIM - (j == J - 1 ? pad_J : 0); // Valid C columns.
+        const size_t C_rows = DIM - (i == I - 1 ? pad_I : 0); // Valid C rows.
 
         gemmini_extended_preload(GARBAGE_ADDR, out_sp_addr, DIM, DIM, C_cols, C_rows);
 
@@ -534,15 +588,15 @@ static void sp_tiled_matmul_os(const elem_t * A, const elem_t * B, const void * 
 
   // Move-out C
   if (C != NULL) {
-    const size_t sizeof_C = full_C ? sizeof(acc_t) : sizeof(elem_t);
+    const size_t sizeof_C = full_C ? sizeof(acc_t) : sizeof(elem_t); // Output element width.
 
     for (size_t i = 0; i < I; i++) {
       for (size_t j = 0; j < J; j++) {
-        void * const C_dram_addr = (int8_t*)C + (i*C_row_stride + j)*DIM*sizeof_C;
-        const uint32_t C_sp_addr = C_sp_addr_start + (i*J + j)*DIM;
+        void * const C_dram_addr = (int8_t*)C + (i*C_row_stride + j)*DIM*sizeof_C; // DRAM destination for C tile.
+        const uint32_t C_sp_addr = C_sp_addr_start + (i*J + j)*DIM; // Accumulator source row for C tile.
 
-        const size_t C_cols = DIM - (j == J - 1 ? pad_J : 0);
-        const size_t C_rows = DIM - (i == I - 1 ? pad_I : 0);
+        const size_t C_cols = DIM - (j == J - 1 ? pad_J : 0); // Valid C columns.
+        const size_t C_rows = DIM - (i == I - 1 ? pad_I : 0); // Valid C rows.
 
         gemmini_extended_mvout(C_dram_addr, C_sp_addr, C_cols, C_rows);
       }
@@ -758,34 +812,34 @@ static void tiled_matmul_outer(size_t dim_I, size_t dim_J, size_t dim_K,
         uint8_t weightA,
         int dataflow) {
 
-  const size_t dim_I_padded = (dim_I / DIM + (dim_I % DIM != 0)) * DIM;
-  const size_t dim_J_padded = (dim_J / DIM + (dim_J % DIM != 0)) * DIM;
-  const size_t dim_K_padded = (dim_K / DIM + (dim_K % DIM != 0)) * DIM;
+  const size_t dim_I_padded = (dim_I / DIM + (dim_I % DIM != 0)) * DIM; // M rounded up to DIM.
+  const size_t dim_J_padded = (dim_J / DIM + (dim_J % DIM != 0)) * DIM; // N rounded up to DIM.
+  const size_t dim_K_padded = (dim_K / DIM + (dim_K % DIM != 0)) * DIM; // K rounded up to DIM.
 
-  const size_t I0 = dim_I_padded / (tile_I*DIM) + (dim_I_padded % (tile_I*DIM) != 0);
-  const size_t J0 = dim_J_padded / (tile_J*DIM) + (dim_J_padded % (tile_J*DIM) != 0);
-  const size_t K0 = dim_K_padded / (tile_K*DIM) + (dim_K_padded % (tile_K*DIM) != 0);
+  const size_t I0 = dim_I_padded / (tile_I*DIM) + (dim_I_padded % (tile_I*DIM) != 0); // Number of outer M tiles.
+  const size_t J0 = dim_J_padded / (tile_J*DIM) + (dim_J_padded % (tile_J*DIM) != 0); // Number of outer N tiles.
+  const size_t K0 = dim_K_padded / (tile_K*DIM) + (dim_K_padded % (tile_K*DIM) != 0); // Number of outer K tiles.
 
   // These lines here are supposed to help us deal with when the dimensions of
   // the systolic array aren't divisible by the tiling factors
-  const size_t last_I = dim_I_padded % (tile_I*DIM) == 0 ? tile_I : (dim_I_padded/DIM) % tile_I;
-  const size_t last_J = dim_J_padded % (tile_J*DIM) == 0 ? tile_J : (dim_J_padded/DIM) % tile_J;
-  const size_t last_K = dim_K_padded % (tile_K*DIM) == 0 ? tile_K : (dim_K_padded/DIM) % tile_K;
+  const size_t last_I = dim_I_padded % (tile_I*DIM) == 0 ? tile_I : (dim_I_padded/DIM) % tile_I; // DIM-blocks in final M tile.
+  const size_t last_J = dim_J_padded % (tile_J*DIM) == 0 ? tile_J : (dim_J_padded/DIM) % tile_J; // DIM-blocks in final N tile.
+  const size_t last_K = dim_K_padded % (tile_K*DIM) == 0 ? tile_K : (dim_K_padded/DIM) % tile_K; // DIM-blocks in final K tile.
 
   // These lines are supposed to figure out how much padding the hardware is
   // supposed to add for the final tile
-  const size_t padding_I = dim_I_padded - dim_I;
-  const size_t padding_J = dim_J_padded - dim_J;
-  const size_t padding_K = dim_K_padded - dim_K;
+  const size_t padding_I = dim_I_padded - dim_I; // Invalid M rows in final tile.
+  const size_t padding_J = dim_J_padded - dim_J; // Invalid N columns in final tile.
+  const size_t padding_K = dim_K_padded - dim_K; // Invalid K columns/rows in final tile.
 
-  const bool no_bias = D == NULL;
+  const bool no_bias = D == NULL; // True when D should be treated as zero.
 
   if (no_bias) {
     D = (void*) 1; // Dummy address which isn't NULL
   }
 
-  const size_t sizeof_D = low_D ? sizeof(elem_t) : sizeof(acc_t) ;
-  const size_t sizeof_C = full_C ? sizeof(acc_t) : sizeof(elem_t);
+  const size_t sizeof_D = low_D ? sizeof(elem_t) : sizeof(acc_t) ; // Bias element width.
+  const size_t sizeof_C = full_C ? sizeof(acc_t) : sizeof(elem_t); // Output element width.
 
   gemmini_extended_config_ex(dataflow, act & 3, 0, 1, a_transpose, b_transpose);
   gemmini_extended_config_st(stride_C * sizeof_C, act & 3, scale);
@@ -794,25 +848,25 @@ static void tiled_matmul_outer(size_t dim_I, size_t dim_J, size_t dim_K,
   gemmini_extended3_config_ld(repeating_bias ? 0 : (stride_D * sizeof_D), D_scale_factor, low_D, 2);
 
   if (act == IGELU) {
-    const acc_scale_t sqrt_2 = 1.41421356237;
-    const acc_scale_t S = bert_scale;
-    const acc_scale_t S_erf = (-0.2888 * ((S*S) / 2));
+    const acc_scale_t sqrt_2 = 1.41421356237; // sqrt(2) used by GELU approximation.
+    const acc_scale_t S = bert_scale; // Quantization scale for BERT-style activations.
+    const acc_scale_t S_erf = (-0.2888 * ((S*S) / 2)); // Scale folded into erf polynomial.
 
-    const acc_t qb = -1.769 / (S / sqrt_2);
-    const acc_t qc = 1.0 / S_erf;
+    const acc_t qb = -1.769 / (S / sqrt_2); // Quantized linear coefficient.
+    const acc_t qc = 1.0 / S_erf; // Quantized quadratic coefficient.
 
     gemmini_config_norm(0, 0, 0, 0, 0, qb, qc);
   }
 
   if (act == SOFTMAX) {
-    const scale_t a = 0.3585;
-    const scale_t b = 1.353;
-    const scale_t c = 0.344;
+    const scale_t a = 0.3585; // Softmax integer exponential approximation coefficient.
+    const scale_t b = 1.353; // Softmax integer exponential approximation coefficient.
+    const scale_t c = 0.344; // Softmax integer exponential approximation coefficient.
 
-    const acc_t qln2 = (int) (0.693147 / bert_scale);
-    const acc_t qln2_inv = 65536 / qln2;
-    const acc_t qb = b / bert_scale;
-    const acc_t qc = c / (a*bert_scale*bert_scale);
+    const acc_t qln2 = (int) (0.693147 / bert_scale); // Quantized ln(2).
+    const acc_t qln2_inv = 65536 / qln2; // Fixed-point reciprocal of qln2.
+    const acc_t qb = b / bert_scale; // Quantized polynomial coefficient b.
+    const acc_t qc = c / (a*bert_scale*bert_scale); // Quantized polynomial coefficient c/a.
 
     gemmini_config_norm(qln2, 0, 0, 1, 0, qb, qc);
     gemmini_config_norm(qln2_inv, 1, 0, 1, 0, qb, qc);
@@ -834,10 +888,10 @@ static void tiled_matmul_outer(size_t dim_I, size_t dim_J, size_t dim_K,
   }
 
   // reuse operand if it fits scratchpad
-  int a_spad_id = 0;
-  int b_spad_id = 0;
-  bool b_reuse = (J0 * K0 <= 2) && (dataflow == WEIGHT_STATIONARY);
-  bool a_reuse = (I0 * K0 <= 2) && (dataflow == WEIGHT_STATIONARY);
+  int a_spad_id = 0; // Hardware reuse slot for A.
+  int b_spad_id = 0; // Hardware reuse slot for B.
+  bool b_reuse = (J0 * K0 <= 2) && (dataflow == WEIGHT_STATIONARY); // Reuse B if it fits in the double buffer.
+  bool a_reuse = (I0 * K0 <= 2) && (dataflow == WEIGHT_STATIONARY); // Reuse A if it fits in the double buffer.
 
   for (size_t i0 = 0; i0 < I0; i0++)
     for (size_t j0 = 0; j0 < J0; j0++)
@@ -847,24 +901,24 @@ static void tiled_matmul_outer(size_t dim_I, size_t dim_J, size_t dim_K,
         if(b_reuse)
           b_spad_id = ((j0+k0) == 0) ? 1 : 2;
 
-        const void * pre;
+        const void * pre; // Bias pointer for the first K tile, NULL for accumulations.
         if (k0 != 0) {
           pre = NULL;
         } else {
-          size_t bias_row = repeating_bias ? 0 : i0*tile_I*DIM;
+          size_t bias_row = repeating_bias ? 0 : i0*tile_I*DIM; // Bias source row for this M tile.
           // pre = &(((acc_t*)D)[bias_row * stride_D + j0 * tile_J * DIM]);
           pre = (int8_t*)D + (bias_row * stride_D + j0 * tile_J * DIM)*sizeof_D;
         }
 
-        void * out = k0 == K0-1 ? (int8_t*)C + (i0*tile_I*DIM*stride_C + j0*tile_J*DIM)*sizeof_C : NULL;
+        void * out = k0 == K0-1 ? (int8_t*)C + (i0*tile_I*DIM*stride_C + j0*tile_J*DIM)*sizeof_C : NULL; // Only final K tile writes output.
 
-        const size_t I = i0 < I0-1 ? tile_I : last_I;
-        const size_t J = j0 < J0-1 ? tile_J : last_J;
-        const size_t K = k0 < K0-1 ? tile_K : last_K;
+        const size_t I = i0 < I0-1 ? tile_I : last_I; // DIM-block rows in this tile.
+        const size_t J = j0 < J0-1 ? tile_J : last_J; // DIM-block cols in this tile.
+        const size_t K = k0 < K0-1 ? tile_K : last_K; // DIM-block reduction size.
 
-        const size_t pad_I = i0 == I0-1 ? padding_I : 0;
-        const size_t pad_J = j0 == J0-1 ? padding_J : 0;
-        const size_t pad_K = k0 == K0-1 ? padding_K : 0;
+        const size_t pad_I = i0 == I0-1 ? padding_I : 0; // Invalid rows in this tile.
+        const size_t pad_J = j0 == J0-1 ? padding_J : 0; // Invalid cols in this tile.
+        const size_t pad_K = k0 == K0-1 ? padding_K : 0; // Invalid reduction elements in this tile.
 
         const elem_t * a = a_transpose ? (A + k0*tile_K*DIM*stride_A + i0*tile_I*DIM)
           : (A + i0*tile_I*DIM*stride_A + k0*tile_K*DIM);
@@ -894,14 +948,14 @@ static void tiled_matmul_outer(size_t dim_I, size_t dim_J, size_t dim_K,
 static acc_t int_sqrt(acc_t n) {
   if (n == 0) return 0;
 
-  int bits = 0;
+  int bits = 0; // Bit width of n, used to seed Newton iteration.
   for (acc_t x = n; x > 0; x /= 2)
     bits++;
 
-  acc_t x_prev = 1 << ((bits + 1) / 2);
+  acc_t x_prev = 1 << ((bits + 1) / 2); // Initial overestimate of sqrt(n).
 
   while (1) {
-    acc_t x_next = (x_prev + n / x_prev) / 2;
+    acc_t x_next = (x_prev + n / x_prev) / 2; // Newton-Raphson refinement.
     if (x_next >= x_prev) return x_prev;
     x_prev = x_next;
   };
@@ -912,21 +966,21 @@ static acc_t int_sqrt(acc_t n) {
 static elem_t scale_and_sat(acc_t x, int act, acc_scale_t scale, acc_scale_t bert_scale) {
   // Apply I-GELU if needed
   if (act == IGELU) {
-    const acc_scale_t sqrt_2 = 1.41421356237;
+    const acc_scale_t sqrt_2 = 1.41421356237; // sqrt(2) for GELU erf approximation.
 
-    const acc_scale_t S = bert_scale;
+    const acc_scale_t S = bert_scale; // Quantization scale for BERT-style activations.
 
-    const acc_scale_t S_erf = (-0.2888 * (S/sqrt_2)*(S/sqrt_2));
-    const acc_t q1 = 1 / S_erf;
-    const acc_t qb = -1.769 / (S / sqrt_2);
-    const acc_t qc = 1.0 / (-0.2888 * (S / sqrt_2) * (S / sqrt_2));
+    const acc_scale_t S_erf = (-0.2888 * (S/sqrt_2)*(S/sqrt_2)); // Scale folded into erf polynomial.
+    const acc_t q1 = 1 / S_erf; // Quantized constant term.
+    const acc_t qb = -1.769 / (S / sqrt_2); // Quantized linear coefficient.
+    const acc_t qc = 1.0 / (-0.2888 * (S / sqrt_2) * (S / sqrt_2)); // Quantized quadratic coefficient.
 
-    const acc_t q = x;
+    const acc_t q = x; // Original accumulator value before GELU.
 
-    const acc_t q_sign = q < 0 ? -1 : 1;
-    const acc_t q_clipped = abs(q) > (-qb) ? (-qb) : abs(q);
-    const acc_t q_poly = (q_clipped + qb)*(q_clipped + qb) + qc;
-    const acc_t q_erf = q_sign * q_poly;
+    const acc_t q_sign = q < 0 ? -1 : 1; // Sign used to restore odd symmetry.
+    const acc_t q_clipped = abs(q) > (-qb) ? (-qb) : abs(q); // Input clipped to polynomial domain.
+    const acc_t q_poly = (q_clipped + qb)*(q_clipped + qb) + qc; // Polynomial approximation.
+    const acc_t q_erf = q_sign * q_poly; // Signed erf approximation.
 
     x = q * (q_erf + q1);
   }
@@ -943,12 +997,16 @@ static elem_t scale_and_sat(acc_t x, int act, acc_scale_t scale, acc_scale_t ber
 }
 
 #ifdef HAS_MVIN_SCALE
+// Apply the configured mvin scale in CPU reference code when hardware supports
+// scaled element loads.
 #define GEMMINI_SCALE(x, scale) MVIN_SCALE((x), (scale))
 #else
 #define GEMMINI_SCALE(x, scale) (x)
 #endif
 
 #ifdef HAS_MVIN_ACC_SCALE
+// Apply the configured accumulator-load scale in CPU reference code when
+// hardware supports scaled accumulator loads.
 #define GEMMINI_ACC_SCALE(x, scale) MVIN_SCALE_ACC((x), (scale))
 #else
 #define GEMMINI_ACC_SCALE(x, scale) (x)
@@ -962,16 +1020,16 @@ static void matmul_cpu(bool transA, bool transB, size_t DIM_I, size_t DIM_J, siz
         scale_t A_scale_factor, scale_t B_scale_factor, scale_acc_t D_scale_factor,
         int act, acc_scale_t scale, acc_scale_t bert_scale, bool repeating_bias) {
 
-  const int no_bias = D == NULL;
+  const int no_bias = D == NULL; // True when D should be treated as zero.
   if (act != LAYERNORM && act != SOFTMAX && !transA && !transB && DIM_I % 4 == 0 && DIM_J % 4 == 0) {
     for (size_t i = 0; i < DIM_I; i += 4) {
       for (size_t j = 0; j < DIM_J; j += 4) {
 
-        acc_t result[4][4]; // = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}};
+        acc_t result[4][4]; // Four-by-four accumulator block for the unrolled CPU fast path.
 
         for (size_t ii = 0; ii < 4; ii++)
           for (size_t jj = 0; jj < 4; jj++) {
-            const size_t bias_row = repeating_bias ? 0 : i + ii;
+            const size_t bias_row = repeating_bias ? 0 : i + ii; // Bias row for this output row.
             result[ii][jj] = no_bias ? 0 :
               GEMMINI_ACC_SCALE(*(D + bias_row*stride_D + j + jj), D_scale_factor);
           }
@@ -1062,12 +1120,12 @@ static void matmul_cpu(bool transA, bool transB, size_t DIM_I, size_t DIM_J, siz
       }
     }
   } else {
-    size_t A_dim_strides[2] = {!transA ? stride_A : 1, !transA ? 1 : stride_A}; // i, j stride
-    size_t B_dim_strides[2] = {!transB ? 1 : stride_B, !transB ? stride_B : 1}; // j, k stride
+    size_t A_dim_strides[2] = {!transA ? stride_A : 1, !transA ? 1 : stride_A}; // A strides for i and k.
+    size_t B_dim_strides[2] = {!transB ? 1 : stride_B, !transB ? stride_B : 1}; // B strides for j and k.
 
     // We also create a buffer that we can use for layernorms and softmaxes
-    static acc_t c_buffer[1024];
-    const size_t c_buffer_sz = sizeof(c_buffer)/sizeof(c_buffer[0]);
+    static acc_t c_buffer[1024]; // Row buffer used before layernorm or softmax.
+    const size_t c_buffer_sz = sizeof(c_buffer)/sizeof(c_buffer[0]); // Number of accumulator entries in c_buffer.
     if ((act == LAYERNORM || act == SOFTMAX) && DIM_J > c_buffer_sz) {
       printf("Matmul is too large to normalize\n");
       exit(1);
@@ -1075,14 +1133,14 @@ static void matmul_cpu(bool transA, bool transB, size_t DIM_I, size_t DIM_J, siz
 
     for (size_t i = 0; i < DIM_I; i++) {
       for (size_t j = 0; j < DIM_J; j++) {
-        elem_t* c = C + (i * stride_C) + j;
+        elem_t* c = C + (i * stride_C) + j; // Output element pointer.
 
-        const size_t bias_row = repeating_bias ? 0 : i;
-        acc_t sum = no_bias ? 0 : GEMMINI_ACC_SCALE(*(D + bias_row * stride_D + j), D_scale_factor);
+        const size_t bias_row = repeating_bias ? 0 : i; // Bias source row.
+        acc_t sum = no_bias ? 0 : GEMMINI_ACC_SCALE(*(D + bias_row * stride_D + j), D_scale_factor); // Accumulator initialized from bias.
 
         for (size_t k = 0; k < DIM_K; k++) {
-          const elem_t* a = A + i * A_dim_strides[0] + k * A_dim_strides[1];
-          const elem_t* b = B + j * B_dim_strides[0] + k * B_dim_strides[1];
+          const elem_t* a = A + i * A_dim_strides[0] + k * A_dim_strides[1]; // A(i,k) pointer.
+          const elem_t* b = B + j * B_dim_strides[0] + k * B_dim_strides[1]; // B(k,j) pointer.
           sum += (GEMMINI_SCALE(*a, A_scale_factor) * GEMMINI_SCALE(*b, B_scale_factor));
         }
 
@@ -1094,17 +1152,17 @@ static void matmul_cpu(bool transA, bool transB, size_t DIM_I, size_t DIM_J, siz
 
 #ifdef HAS_NORMALIZATIONS
       if (act == LAYERNORM) {
-        acc_t sum = 0;
+        acc_t sum = 0; // Sum of one row before layernorm.
         for (size_t j = 0; j < DIM_J; j++)
           sum += c_buffer[j];
-        acc_t mean = sum / (acc_t)DIM_J;
+        acc_t mean = sum / (acc_t)DIM_J; // Integer row mean.
 
-        acc_t total_err_sq = 0;
+        acc_t total_err_sq = 0; // Sum of squared deviations.
         for (size_t j = 0; j < DIM_J; j++)
           total_err_sq += (c_buffer[j] - mean)*(c_buffer[j] - mean);
-        acc_t variance = total_err_sq / (acc_t)DIM_J;
+        acc_t variance = total_err_sq / (acc_t)DIM_J; // Integer row variance.
 
-        acc_t stddev = int_sqrt(variance);
+        acc_t stddev = int_sqrt(variance); // Integer standard deviation.
         if (variance == 0) stddev = 1;
 
         for (size_t j = 0; j < DIM_J; j++) {
@@ -1116,35 +1174,35 @@ static void matmul_cpu(bool transA, bool transB, size_t DIM_I, size_t DIM_J, siz
           *c = scale_and_sat(c_buffer[j], act, scale, bert_scale);
         }
       } else if (act == SOFTMAX) {
-        const scale_t a = 0.3585;
-        const scale_t b = 1.353;
-        const scale_t c = 0.344;
+        const scale_t a = 0.3585; // Softmax integer exponential approximation coefficient.
+        const scale_t b = 1.353; // Softmax integer exponential approximation coefficient.
+        const scale_t c = 0.344; // Softmax integer exponential approximation coefficient.
 
         // is SCALE supposed to be input scale?
-        const acc_t qln2 = (acc_t) (0.693147 / bert_scale);
-        const acc_t qln2_inv = 65536 / qln2;
-        const acc_t qb = b / bert_scale;
-        const acc_t qc = c / (a*bert_scale*bert_scale);
+        const acc_t qln2 = (acc_t) (0.693147 / bert_scale); // Quantized ln(2).
+        const acc_t qln2_inv = 65536 / qln2; // Fixed-point reciprocal of qln2.
+        const acc_t qb = b / bert_scale; // Quantized polynomial coefficient b.
+        const acc_t qc = c / (a*bert_scale*bert_scale); // Quantized polynomial coefficient c/a.
 
         // pass 1: get max_q
-        acc_t max_q = -2147483648;
+        acc_t max_q = -2147483648; // Row maximum for numerically stable softmax.
         for (size_t j = 0; j < DIM_J; j++) {
           if (c_buffer[j] > max_q) max_q = c_buffer[j];
         }
 
         // pass 2: calculate iexp(q_tilde) and sum(q_tilde)
-        acc_t sum_exp = 0;
+        acc_t sum_exp = 0; // Sum of approximate exponentials.
         for (size_t j = 0; j < DIM_J; j++) {
-          acc_t q = c_buffer[j] - max_q;
-          acc_t z = (acc_t) (-q * qln2_inv) >> 16;
-          acc_t qp = q + z * qln2;
-          acc_t q_exp = (qp + qb)*(qp + qb) + qc;
+          acc_t q = c_buffer[j] - max_q; // Shifted input.
+          acc_t z = (acc_t) (-q * qln2_inv) >> 16; // Integer exponent bucket.
+          acc_t qp = q + z * qln2; // Reduced-range input.
+          acc_t q_exp = (qp + qb)*(qp + qb) + qc; // Polynomial exp approximation.
           c_buffer[j] = q_exp >> z;
           sum_exp += c_buffer[j];
         }
 
         // pass 3: divide by sum
-        scale_t factor = (127.f) / (float) sum_exp; // what corresponds to 1 in output?
+        scale_t factor = (127.f) / (float) sum_exp; // Output normalization factor.
         for (size_t j = 0; j < DIM_J; j++) {
           elem_t* c = C + (i * stride_C) + j;
           *c = scale_and_sat(c_buffer[j], act, factor, bert_scale);
@@ -1157,7 +1215,10 @@ static void matmul_cpu(bool transA, bool transB, size_t DIM_I, size_t DIM_J, siz
 
 #undef GEMMINI_SCALE
 
-// General matmul backend selector: output-stationary, weight-stationary, CPU.
+// General backend selector:
+//   OS: output-stationary Gemmini path
+//   WS: weight-stationary Gemmini path
+//   CPU: software reference path
 enum tiled_matmul_type_t {OS, WS, CPU}; // TODO rename this so it's name also applies to convs
 
 // Run tiled matrix multiplication with caller-specified tile sizes.
@@ -1318,17 +1379,17 @@ _STATIC void tiled_matmul_auto(size_t dim_I, size_t dim_J, size_t dim_K,
 
     // Hardware tiles are whole DIM x DIM blocks, so round logical dimensions
     // up and track the final-tile padding separately in tiled_matmul_outer.
-    const size_t dim_I_padded = (dim_I / DIM + (dim_I % DIM != 0)) * DIM;
-    const size_t dim_J_padded = (dim_J / DIM + (dim_J % DIM != 0)) * DIM;
-    const size_t dim_K_padded = (dim_K / DIM + (dim_K % DIM != 0)) * DIM;
+    const size_t dim_I_padded = (dim_I / DIM + (dim_I % DIM != 0)) * DIM; // M rounded up to DIM.
+    const size_t dim_J_padded = (dim_J / DIM + (dim_J % DIM != 0)) * DIM; // N rounded up to DIM.
+    const size_t dim_K_padded = (dim_K / DIM + (dim_K % DIM != 0)) * DIM; // K rounded up to DIM.
 
-    const bool double_buffered = tiled_matmul_type == WS;
+    const bool double_buffered = tiled_matmul_type == WS; // WS uses half memories for ping-pong buffering.
 
     const size_t max_spad_rows = double_buffered ? BANK_NUM * BANK_ROWS / 2 :
       BANK_NUM * BANK_ROWS;
-    const size_t max_acc_rows = double_buffered ? ACC_ROWS / 2 : ACC_ROWS;
+    const size_t max_acc_rows = double_buffered ? ACC_ROWS / 2 : ACC_ROWS; // Accumulator rows available to one tile.
 
-    size_t tile_I, tile_J, tile_K;
+    size_t tile_I, tile_J, tile_K; // Chosen tile sizes in DIM-sized blocks.
 
     // LayerNorm/Softmax need a whole row's J dimension resident so the
     // normalizer can compute row statistics.
@@ -1378,8 +1439,8 @@ _STATIC void tiled_matmul_auto(size_t dim_I, size_t dim_J, size_t dim_K,
 
 #ifdef PRINT_TILE
 #if PRINT_TILE
-    const int spad_rows = tiled_matmul_total_spad_rows(tile_I, tile_J, tile_K);
-    const int acc_rows = tiled_matmul_total_acc_rows(tile_I, tile_J);
+    const int spad_rows = tiled_matmul_total_spad_rows(tile_I, tile_J, tile_K); // Scratchpad rows used by selected tile.
+    const int acc_rows = tiled_matmul_total_acc_rows(tile_I, tile_J); // Accumulator rows used by selected tile.
 
     printf("tile_I: %d\n", tile_I);
     printf("tile_J: %d\n", tile_J);
@@ -1450,19 +1511,19 @@ static void sp_tiled_conv(
   // When dw convs are true, we assume that kchs and ochs are 1
   if (dw) { kchs = 1; pochs = 1; }
 
-  const int orows = porows * pool_stride + pool_size - 1 - pupad - pdpad;
-  const int ocols = pocols * pool_stride + pool_size - 1 - plpad - prpad;
-  const int ochs = pochs;
+  const int orows = porows * pool_stride + pool_size - 1 - pupad - pdpad; // Output rows covered before pooling edge padding.
+  const int ocols = pocols * pool_stride + pool_size - 1 - plpad - prpad; // Output cols covered before pooling edge padding.
+  const int ochs = pochs; // Output channels in this tile.
 
   // Calculate image dimensions
   // Note: "irows" and "icols" includes padding
-  const int dilated_krows = krows + (kernel_dilation - 1)*(krows - 1);
-  const int dilated_kcols = kcols + (kernel_dilation - 1)*(kcols - 1);
-  int irows = orows * stride + dilated_krows - 1;
-  int icols = ocols * stride + dilated_kcols - 1;
-  int irows_unpadded = irows - upad - dpad;
-  int icols_unpadded = icols - lpad - rpad;
-  const int ichs = kchs;
+  const int dilated_krows = krows + (kernel_dilation - 1)*(krows - 1); // Effective kernel height after dilation.
+  const int dilated_kcols = kcols + (kernel_dilation - 1)*(kcols - 1); // Effective kernel width after dilation.
+  int irows = orows * stride + dilated_krows - 1; // Input rows touched by this output tile.
+  int icols = ocols * stride + dilated_kcols - 1; // Input cols touched by this output tile.
+  int irows_unpadded = irows - upad - dpad; // Input rows after removing top/bottom padding.
+  int icols_unpadded = icols - lpad - rpad; // Input cols after removing left/right padding.
+  const int ichs = kchs; // Input channels in this tile.
 
 #define UNDILATED(x) ((input_dilated) ? (((x)+1)/2) : (x))
 
@@ -1486,19 +1547,19 @@ static void sp_tiled_conv(
 #endif
 
   // Calculate spad address offsets
-  const int out_channels_per_bank = ochs / DIM + (ochs % DIM != 0);
-  const int in_channels_per_bank = kchs / DIM + (kchs % DIM != 0);
+  const int out_channels_per_bank = ochs / DIM + (ochs % DIM != 0); // DIM blocks needed for output channels.
+  const int in_channels_per_bank = kchs / DIM + (kchs % DIM != 0); // DIM blocks needed for input channels.
   const int B_rows = trans_weight_0132 ?
     in_channels_per_bank * kcols * krows * ochs :
-    out_channels_per_bank * kcols * krows * kchs;
+    out_channels_per_bank * kcols * krows * kchs; // Scratchpad rows reserved for weights.
 
-  static uint32_t D_sp_addr_row = 0;
-  static uint32_t C_sp_addr_row = 0;
+  static uint32_t D_sp_addr_row = 0; // Alternating accumulator row base for bias tiles.
+  static uint32_t C_sp_addr_row = 0; // Alternating accumulator row base for output tiles.
 
-  const uint32_t A_sp_addr_start = 0;
-  const uint32_t B_sp_addr_start = BANK_NUM * BANK_ROWS - B_rows;
-  const uint32_t D_sp_addr_start = (1 << (ADDR_LEN - 1)) + D_sp_addr_row;
-  const uint32_t C_sp_addr_start = (3 << (ADDR_LEN - 2)) + C_sp_addr_row;
+  const uint32_t A_sp_addr_start = 0; // Scratchpad base row for input activations.
+  const uint32_t B_sp_addr_start = BANK_NUM * BANK_ROWS - B_rows; // Scratchpad base row for weights.
+  const uint32_t D_sp_addr_start = (1 << (ADDR_LEN - 1)) + D_sp_addr_row; // Accumulator base row for bias.
+  const uint32_t C_sp_addr_start = (3 << (ADDR_LEN - 2)) + C_sp_addr_row; // Accumulator base row for output.
 
   if (bias != 0) {
     D_sp_addr_row = (D_sp_addr_row + ACC_ROWS / 2) % ACC_ROWS;
@@ -1837,19 +1898,19 @@ static int tiled_conv_total_spad_rows_dw(bool acc, bool weight,
         int krows, int kcols, int kchs,
         int pool_size, int pool_stride) {
 
-    const int orows = porows * pool_stride + pool_size - 1;
-    const int ocols = pocols * pool_stride + pool_size - 1;
+    const int orows = porows * pool_stride + pool_size - 1; // Output rows before padding adjustment.
+    const int ocols = pocols * pool_stride + pool_size - 1; // Output cols before padding adjustment.
 
-    const int irows = orows * stride + krows - 1; // - 2 * padding;
-    const int icols = ocols * stride + kcols - 1; // - 2 * padding;
-    const int ichs = kchs;
+    const int irows = orows * stride + krows - 1; // Input rows touched by this tile.
+    const int icols = ocols * stride + kcols - 1; // Input cols touched by this tile.
+    const int ichs = kchs; // Input channels in this depthwise tile.
 
-    const int in_channels_per_bank = ichs / DIM + (ichs % DIM != 0);
-    const int out_channels_per_bank = ochs / DIM + (ochs % DIM != 0);
+    const int in_channels_per_bank = ichs / DIM + (ichs % DIM != 0); // DIM blocks for input channels.
+    const int out_channels_per_bank = ochs / DIM + (ochs % DIM != 0); // DIM blocks for output channels.
 
-    const int A_rows = in_channels_per_bank * batches * irows * icols;
-    const int B_rows = out_channels_per_bank * kcols * krows * kchs;
-    const int C_rows = out_channels_per_bank * batches * orows * ocols;
+    const int A_rows = in_channels_per_bank * batches * irows * icols; // Activation rows required.
+    const int B_rows = out_channels_per_bank * kcols * krows * kchs; // Weight rows required.
+    const int C_rows = out_channels_per_bank * batches * orows * ocols; // Accumulator rows required.
 
     if (acc)
         return C_rows;
@@ -1873,22 +1934,22 @@ static int tiled_conv_total_spad_rows(bool acc,
         int krows, int kcols, int kchs,
         int pool_size, int pool_stride) {
 
-    const int orows = porows * pool_stride + pool_size - 1;
-    const int ocols = pocols * pool_stride + pool_size - 1;
+    const int orows = porows * pool_stride + pool_size - 1; // Output rows before padding adjustment.
+    const int ocols = pocols * pool_stride + pool_size - 1; // Output cols before padding adjustment.
 
-    const int krows_dilated = krows + (kernel_dilation - 1)*(krows - 1);
-    const int kcols_dilated = kcols + (kernel_dilation - 1)*(kcols - 1);
+    const int krows_dilated = krows + (kernel_dilation - 1)*(krows - 1); // Effective kernel height.
+    const int kcols_dilated = kcols + (kernel_dilation - 1)*(kcols - 1); // Effective kernel width.
 
-    int irows = orows * stride + krows_dilated - 1; // - 2 * padding;
-    int icols = ocols * stride + kcols_dilated - 1; // - 2 * padding;
-    const int ichs = kchs;
+    int irows = orows * stride + krows_dilated - 1; // Input rows touched by this tile.
+    int icols = ocols * stride + kcols_dilated - 1; // Input cols touched by this tile.
+    const int ichs = kchs; // Input channels in this tile.
 
     irows = irows / input_dilation + (irows % input_dilation != 0);
     icols = icols / input_dilation + (icols % input_dilation != 0);
 
-    const int in_channels_per_bank = ichs / DIM + (ichs % DIM != 0);
-    const int out_channels_per_bank = ochs / DIM + (ochs % DIM != 0);
-    const int batches_per_bank = batches / DIM + (batches % DIM != 0);
+    const int in_channels_per_bank = ichs / DIM + (ichs % DIM != 0); // DIM blocks for input channels.
+    const int out_channels_per_bank = ochs / DIM + (ochs % DIM != 0); // DIM blocks for output channels.
+    const int batches_per_bank = batches / DIM + (batches % DIM != 0); // DIM blocks for transposed batch layout.
 
     const int A_rows = trans_input_3120 ?
         (batches_per_bank * ichs * (irows >> downsample) * (icols >> downsample)) :
@@ -1920,29 +1981,29 @@ static void conv_cpu_without_pool(
 
         int act, acc_scale_t scale) {
 
-  bool no_bias = bias == NULL;
+  bool no_bias = bias == NULL; // True when convolution starts from zero instead of bias.
 
   for (int b = 0; b < batch_size; b++) {
     for (int orow = 0; orow < out_row_dim; orow++) {
       for (int ocol = 0; ocol < out_col_dim; ocol++) {
         for (int och = 0; och < out_channels; och++) {
 
-          acc_t opixel = no_bias ? 0 : bias[och];
+          acc_t opixel = no_bias ? 0 : bias[och]; // Accumulated output pixel.
 
           for (int krow = 0; krow < kernel_dim; krow++) {
             if ((orow * stride + krow * kernel_dilation - padding) % input_dilation != 0)
               continue;
 
-            const int irow = (orow * stride + krow * kernel_dilation - padding) / input_dilation;
+            const int irow = (orow * stride + krow * kernel_dilation - padding) / input_dilation; // Input row sampled by this kernel row.
 
             for (int kcol = 0; kcol < kernel_dim; kcol++) {
               if ((ocol * stride + kcol * kernel_dilation - padding) % input_dilation != 0)
                 continue;
 
-              const int icol = (ocol * stride + kcol * kernel_dilation - padding) / input_dilation;
+              const int icol = (ocol * stride + kcol * kernel_dilation - padding) / input_dilation; // Input col sampled by this kernel col.
 
               for (int kch = 0; kch < in_channels; kch++) {
-                const elem_t *in = input + (b * in_row_dim * in_col_dim + irow * in_col_dim + icol) * in_stride + kch;
+                const elem_t *in = input + (b * in_row_dim * in_col_dim + irow * in_col_dim + icol) * in_stride + kch; // Input element pointer.
                 if (trans_input_3120) {
                   // NHWC to CHWN
                   in = input + (kch * in_row_dim * in_col_dim + irow * in_col_dim + icol) * batch_size + b;
@@ -1951,10 +2012,10 @@ static void conv_cpu_without_pool(
                 elem_t ipixel = irow < 0 || irow >= in_row_dim || icol < 0 || icol >= in_col_dim ?
                     0 : *in;
 
-                const int krow_ = wrot180 ? kernel_dim - krow - 1 : krow;
-                const int kcol_ = wrot180 ? kernel_dim - kcol - 1 : kcol;
+                const int krow_ = wrot180 ? kernel_dim - krow - 1 : krow; // Possibly rotated kernel row.
+                const int kcol_ = wrot180 ? kernel_dim - kcol - 1 : kcol; // Possibly rotated kernel col.
 
-                elem_t weight = *(weights + (krow_ * kernel_dim * in_channels + kcol_ * in_channels + kch) * weight_stride + och);
+                elem_t weight = *(weights + (krow_ * kernel_dim * in_channels + kcol_ * in_channels + kch) * weight_stride + och); // Weight element.
                 if (trans_weight_1203) {
                   // HWIO to WIHO
                   weight = *(weights + (kch * kernel_dim * kernel_dim  + krow_ * kernel_dim + kcol_) * out_channels + och);
@@ -1968,7 +2029,7 @@ static void conv_cpu_without_pool(
             }
           }
 
-          elem_t *out = output + (b * out_row_dim * out_col_dim + orow * out_col_dim + ocol) * out_stride + och;
+          elem_t *out = output + (b * out_row_dim * out_col_dim + orow * out_col_dim + ocol) * out_stride + och; // Output element pointer.
           if (trans_output_1203) {
             // NHWC to HWNC
             out = output + (orow * out_col_dim * batch_size + ocol * batch_size + b) * out_channels + och;
@@ -1995,32 +2056,32 @@ static void conv_dw_cpu_without_pool(
 
         int act, acc_scale_t scale) {
 
-  bool no_bias = bias == NULL;
+  bool no_bias = bias == NULL; // True when depthwise conv starts from zero instead of bias.
 
   for (int b = 0; b < batch_size; b++) {
     for (int orow = 0; orow < out_row_dim; orow++) {
       for (int ocol = 0; ocol < out_col_dim; ocol++) {
         for (int ch = 0; ch < channels; ch++) {
-          acc_t opixel = no_bias ? 0 : bias[ch];
+          acc_t opixel = no_bias ? 0 : bias[ch]; // Accumulated depthwise output pixel.
 
           for (int krow = 0; krow < kernel_dim; krow++) {
-            const int irow = orow * stride + krow - padding;
+            const int irow = orow * stride + krow - padding; // Input row sampled by this kernel row.
 
             for (int kcol = 0; kcol < kernel_dim; kcol++) {
-              const int icol = ocol * stride + kcol - padding;
+              const int icol = ocol * stride + kcol - padding; // Input col sampled by this kernel col.
 
-              const elem_t * in = input + (b * in_row_dim * in_col_dim + irow * in_col_dim + icol) * channels + ch;
+              const elem_t * in = input + (b * in_row_dim * in_col_dim + irow * in_col_dim + icol) * channels + ch; // Input element pointer.
 
               const elem_t ipixel = irow < 0 || irow >= in_row_dim || icol < 0 || icol >= in_col_dim ?
                   0 : *in;
 
-              const elem_t weight = *(weights + (ch * kernel_dim + krow) * kernel_dim  + kcol);
+              const elem_t weight = *(weights + (ch * kernel_dim + krow) * kernel_dim  + kcol); // Depthwise weight element.
 
               opixel += weight * ipixel;
             }
           }
 
-          elem_t *out = output + (b * out_row_dim * out_col_dim + orow * out_col_dim + ocol) * channels + ch;
+          elem_t *out = output + (b * out_row_dim * out_col_dim + orow * out_col_dim + ocol) * channels + ch; // Output element pointer.
 
           *out = scale_and_sat(opixel, act, scale, 0);
         }
@@ -2047,7 +2108,7 @@ static void conv_cpu(
         int act, acc_scale_t scale,
         int pool_size, int pool_stride, int pool_padding) {
 
-  const bool no_pool = pool_stride == 0;
+  const bool no_pool = pool_stride == 0; // Pool stride zero encodes "skip pooling".
   if (no_pool) {
     conv_cpu_without_pool(
         batch_size, in_row_dim, in_col_dim, in_channels,
@@ -2061,23 +2122,23 @@ static void conv_cpu(
     return;
   }
 
-  const bool no_bias = bias == NULL;
-  const int pool_out_row_dim = (out_row_dim + 2 * pool_padding - pool_size) / pool_stride + 1;
-  const int pool_out_col_dim = (out_col_dim + 2 * pool_padding - pool_size) / pool_stride + 1;
+  const bool no_bias = bias == NULL; // True when convolution starts from zero instead of bias.
+  const int pool_out_row_dim = (out_row_dim + 2 * pool_padding - pool_size) / pool_stride + 1; // Pooled output rows.
+  const int pool_out_col_dim = (out_col_dim + 2 * pool_padding - pool_size) / pool_stride + 1; // Pooled output cols.
 
   for (int b = 0; b < batch_size; b++) {
     for (int porow = 0; porow < pool_out_row_dim; porow++) {
       for (int pocol = 0; pocol < pool_out_col_dim; pocol++) {
         for (int poch = 0; poch < out_channels; poch++) {
 
-          elem_t running_max = 0;
-          bool running_max_initialized = false;
+          elem_t running_max = 0; // Current max-pool result.
+          bool running_max_initialized = false; // Tracks whether running_max has a valid value.
 
           for (int pwrow = 0; pwrow < pool_size; pwrow++) {
-            const int orow = porow * pool_stride + pwrow - pool_padding;
+            const int orow = porow * pool_stride + pwrow - pool_padding; // Convolution output row under the pool window.
 
             for (int pwcol = 0; pwcol < pool_size; pwcol++) {
-              const int ocol = pocol * pool_stride + pwcol - pool_padding;
+              const int ocol = pocol * pool_stride + pwcol - pool_padding; // Convolution output col under the pool window.
 
               if (orow < 0 || orow >= out_row_dim || ocol < 0 || ocol >= out_col_dim) {
                 if (!running_max_initialized || running_max < 0) {
@@ -2298,13 +2359,13 @@ static void tiled_conv(
 
     // TODO move everything below this into a tiled_conv_outer function to match the tiled_matmul function
 
-    bool no_bias = false;
+    bool no_bias = false; // True when bias should be treated as zero.
     if (bias == NULL) {
         bias = (acc_t*)1;
         no_bias = true;
     }
 
-    bool no_pool = pool_stride == 0;
+    bool no_pool = pool_stride == 0; // Pool stride zero encodes "skip pooling".
     if (no_pool) {
         pool_size = 1;
         pool_stride = 1;
@@ -2314,7 +2375,7 @@ static void tiled_conv(
     const bool downsample = stride == 2 && kernel_dim == 1 && in_row_dim % 2 == 0 && in_col_dim % 2 == 0
       && padding == 0 && no_pool && input_dilation == 1 && !trans_input_3120;
 
-    const int input_dilated = input_dilation == 2;
+    const int input_dilated = input_dilation == 2; // Encoded flag for the hardware-loop command.
 
 #ifdef GEMMINI_ASSERTIONS
     {
@@ -2362,30 +2423,30 @@ static void tiled_conv(
 
     const size_t st_dram_stride = trans_output_1203 ?
         batch_size * out_channels * sizeof(elem_t) :
-        out_stride * sizeof(elem_t);
+        out_stride * sizeof(elem_t); // Store stride in bytes.
     gemmini_extended_config_st(st_dram_stride, act, scale);
 
     gemmini_extended3_config_ex(WEIGHT_STATIONARY, 0, 0, 0, input_dilation, stride >> downsample, trans_input_3120, trans_weight_0132, false);
 
-    const int pool_out_row_dim = (out_row_dim + 2 * pool_padding - pool_size) / pool_stride + 1;
-    const int pool_out_col_dim = (out_col_dim + 2 * pool_padding - pool_size) / pool_stride + 1;
-    const int dilated_in_row_dim = in_row_dim + (input_dilation - 1) * (in_row_dim- 1);
-    const int dilated_in_col_dim = in_col_dim + (input_dilation - 1) * (in_col_dim- 1);
+    const int pool_out_row_dim = (out_row_dim + 2 * pool_padding - pool_size) / pool_stride + 1; // Pooled output rows.
+    const int pool_out_col_dim = (out_col_dim + 2 * pool_padding - pool_size) / pool_stride + 1; // Pooled output cols.
+    const int dilated_in_row_dim = in_row_dim + (input_dilation - 1) * (in_row_dim- 1); // Logical input rows after dilation.
+    const int dilated_in_col_dim = in_col_dim + (input_dilation - 1) * (in_col_dim- 1); // Logical input cols after dilation.
 
-    size_t a_spad_id = 0;
-    size_t b_spad_id = 0;
+    size_t a_spad_id = 0; // Hardware reuse slot for activation/input tiles.
+    size_t b_spad_id = 0; // Hardware reuse slot for weight tiles.
 
-    int porow_end = pool_out_row_dim;
-	int porow_start = 0;
-    bool a_reuse = false;
-    bool b_reuse = false;
-    size_t num_kch = ceil_divide_int(in_channels, kchs);
-    size_t num_poch = ceil_divide_int(out_channels, pochs);
-    size_t num_b = ceil_divide_int(batch_size, batches);
-    size_t num_porow = ceil_divide_int((porow_end - porow_start), porows);
-    size_t num_pocol = ceil_divide_int(pool_out_col_dim, pocols);
-    size_t num_krow = ceil_divide_int(kernel_dim, krows);
-    size_t num_kcol = ceil_divide_int(kernel_dim, kcols);
+    int porow_end = pool_out_row_dim; // Exclusive pooled-row iteration bound.
+    int porow_start = 0; // Inclusive pooled-row iteration start.
+    bool a_reuse = false; // True when input activations can be reused in scratchpad.
+    bool b_reuse = false; // True when weights can be reused in scratchpad.
+    size_t num_kch = ceil_divide_int(in_channels, kchs); // Number of input-channel tiles.
+    size_t num_poch = ceil_divide_int(out_channels, pochs); // Number of output-channel tiles.
+    size_t num_b = ceil_divide_int(batch_size, batches); // Number of batch tiles.
+    size_t num_porow = ceil_divide_int((porow_end - porow_start), porows); // Number of pooled-row tiles.
+    size_t num_pocol = ceil_divide_int(pool_out_col_dim, pocols); // Number of pooled-col tiles.
+    size_t num_krow = ceil_divide_int(kernel_dim, krows); // Number of kernel-row tiles.
+    size_t num_kcol = ceil_divide_int(kernel_dim, kcols); // Number of kernel-col tiles.
 
 
 //    printf("num_kch: %d, num_poch: %d, num_b: %d, num_porow: %d, num_pocol: %d, num_krow: %d, num_kcol: %d\n", num_kch, num_poch, num_b, num_porow, num_pocol, num_krow, num_kcol);
@@ -2397,26 +2458,26 @@ static void tiled_conv(
 
     for (int b = 0; b < batch_size; b += batches) {
         for (int porow = porow_start; porow < porow_end; porow += porows) {
-            const int orow = porow * pool_stride - pool_padding;
+            const int orow = porow * pool_stride - pool_padding; // First unpooled output row for this pooled tile.
 
             for (int pocol = 0; pocol < pool_out_col_dim; pocol += pocols) {
-                const int ocol = pocol * pool_stride - pool_padding;
+                const int ocol = pocol * pool_stride - pool_padding; // First unpooled output col for this pooled tile.
 
                 for (int poch = 0; poch < out_channels; poch += pochs) {
                     for (int krow = 0; krow < kernel_dim; krow += krows) {
-                        const int orow_floored = orow < 0 ? 0 : orow;
-                        int irow = orow_floored * stride + krow * kernel_dilation - padding;
+                        const int orow_floored = orow < 0 ? 0 : orow; // Output row clamped for input-base calculation.
+                        int irow = orow_floored * stride + krow * kernel_dilation - padding; // First input row for this kernel tile.
 
                         for (int kcol = 0; kcol < kernel_dim; kcol += kcols) {
-                            const int ocol_floored = ocol < 0 ? 0 : ocol;
-                            int icol = ocol_floored * stride + kcol * kernel_dilation - padding;
+                            const int ocol_floored = ocol < 0 ? 0 : ocol; // Output col clamped for input-base calculation.
+                            int icol = ocol_floored * stride + kcol * kernel_dilation - padding; // First input col for this kernel tile.
 
                             for (int kch = 0; kch < in_channels; kch += kchs) {
                                 if(a_reuse)
 						           a_spad_id = (kch + krow + kcol + b + (porow - porow_start) + pocol) == 0 ? 1 : 2;
 					            if(b_reuse)
 						           b_spad_id = (kch + poch + krow + kcol) == 0 ? 1 : 2;
-                                elem_t * out = output + (b * pool_out_row_dim * pool_out_col_dim + porow * pool_out_col_dim + pocol) * out_stride + poch;
+                                elem_t * out = output + (b * pool_out_row_dim * pool_out_col_dim + porow * pool_out_col_dim + pocol) * out_stride + poch; // Output tile pointer.
                                 if (trans_output_1203) {
                                     out = output + (porow * pool_out_col_dim * batch_size + pocol * batch_size + b) * out_channels + poch;
                                 }
@@ -2427,39 +2488,39 @@ static void tiled_conv(
                                     out = NULL;
                                 }
 
-                                const acc_t * bias_ = bias + poch;
+                                const acc_t * bias_ = bias + poch; // Bias tile pointer for first reduction tile.
                                 if (krow > 0 ||
                                         kcol > 0 ||
                                         kch > 0) {
                                     bias_ = NULL;
                                 }
 
-                                const int batches_ = batch_size - b > batches ? batches : batch_size - b;
-                                const int porows_ = pool_out_row_dim - porow > porows ? porows : pool_out_row_dim - porow;
-                                const int pocols_ = pool_out_col_dim - pocol > pocols ? pocols : pool_out_col_dim - pocol;
-                                const int pochs_ = out_channels - poch > pochs ? pochs : out_channels - poch;
-                                const int krows_ = kernel_dim - krow > krows ? krows : kernel_dim - krow;
-                                const int kcols_ = kernel_dim - kcol > kcols ? kcols : kernel_dim - kcol;
-                                const int kchs_ = in_channels - kch > kchs ? kchs : in_channels - kch;
+                                const int batches_ = batch_size - b > batches ? batches : batch_size - b; // Batch tile size.
+                                const int porows_ = pool_out_row_dim - porow > porows ? porows : pool_out_row_dim - porow; // Pooled-row tile size.
+                                const int pocols_ = pool_out_col_dim - pocol > pocols ? pocols : pool_out_col_dim - pocol; // Pooled-col tile size.
+                                const int pochs_ = out_channels - poch > pochs ? pochs : out_channels - poch; // Output-channel tile size.
+                                const int krows_ = kernel_dim - krow > krows ? krows : kernel_dim - krow; // Kernel-row tile size.
+                                const int kcols_ = kernel_dim - kcol > kcols ? kcols : kernel_dim - kcol; // Kernel-col tile size.
+                                const int kchs_ = in_channels - kch > kchs ? kchs : in_channels - kch; // Input-channel tile size.
 
-                                const int ocols_ = pocols_ * pool_stride + pool_size - 1;
-                                const int orows_ = porows_ * pool_stride + pool_size - 1;
+                                const int ocols_ = pocols_ * pool_stride + pool_size - 1; // Unpooled output cols covered.
+                                const int orows_ = porows_ * pool_stride + pool_size - 1; // Unpooled output rows covered.
 
-                                const int plpad = ocol < 0 ? -ocol : 0;
-                                const int prpad = ocol + ocols_ > out_col_dim ? ocol + ocols_ - out_col_dim : 0;
-                                const int pupad = orow < 0 ? -orow : 0;
-                                const int pdpad = orow + orows_ > out_row_dim ? orow + orows_ - out_row_dim : 0;
+                                const int plpad = ocol < 0 ? -ocol : 0; // Left pool padding for this tile.
+                                const int prpad = ocol + ocols_ > out_col_dim ? ocol + ocols_ - out_col_dim : 0; // Right pool padding.
+                                const int pupad = orow < 0 ? -orow : 0; // Upper pool padding.
+                                const int pdpad = orow + orows_ > out_row_dim ? orow + orows_ - out_row_dim : 0; // Lower pool padding.
 
-                                const int dilated_krows_ = krows_ + (kernel_dilation - 1)*(krows_ - 1);
-                                const int dilated_kcols_ = kcols_ + (kernel_dilation - 1)*(kcols_ - 1);
+                                const int dilated_krows_ = krows_ + (kernel_dilation - 1)*(krows_ - 1); // Effective kernel rows.
+                                const int dilated_kcols_ = kcols_ + (kernel_dilation - 1)*(kcols_ - 1); // Effective kernel cols.
 
-                                const int icols_ = (ocols_ - plpad - prpad) * stride + dilated_kcols_ - 1;
-                                const int irows_ = (orows_ - pupad - pdpad) * stride + dilated_krows_ - 1;
+                                const int icols_ = (ocols_ - plpad - prpad) * stride + dilated_kcols_ - 1; // Input cols covered.
+                                const int irows_ = (orows_ - pupad - pdpad) * stride + dilated_krows_ - 1; // Input rows covered.
 
-                                int lpad = icol < 0 ? -icol : 0;
-                                int rpad = icol + icols_ > dilated_in_col_dim ? icol + icols_ - dilated_in_col_dim : 0;
-                                int upad = irow < 0 ? -irow : 0;
-                                int dpad = irow + irows_ > dilated_in_row_dim ? irow + irows_ - dilated_in_row_dim : 0;
+                                int lpad = icol < 0 ? -icol : 0; // Left input padding for this tile.
+                                int rpad = icol + icols_ > dilated_in_col_dim ? icol + icols_ - dilated_in_col_dim : 0; // Right input padding.
+                                int upad = irow < 0 ? -irow : 0; // Upper input padding.
+                                int dpad = irow + irows_ > dilated_in_row_dim ? irow + irows_ - dilated_in_row_dim : 0; // Lower input padding.
 
                                 if (input_dilated) {
                                   lpad += lpad == 0 && icol % 2 != 0;
@@ -2468,21 +2529,21 @@ static void tiled_conv(
                                   dpad += dpad == 0 && (irow + irows_) % 2 != 1;
                                 }
 
-                                int krow_ = krow;
-                                int kcol_ = kcol;
+                                int krow_ = krow; // Kernel-row start after optional 180-degree rotation.
+                                int kcol_ = kcol; // Kernel-col start after optional 180-degree rotation.
                                 if (wrot180) {
                                   krow_ = kernel_dim - krow - krows_;
                                   kcol_ = kernel_dim - kcol - kcols_;
                                 }
 
-                                const elem_t * weights_slice = weights + (krow_*kernel_dim*in_channels + kcol_*in_channels + kch) * weight_stride + poch;
+                                const elem_t * weights_slice = weights + (krow_*kernel_dim*in_channels + kcol_*in_channels + kch) * weight_stride + poch; // Weight tile pointer.
                                 if (trans_weight_1203) {
                                   weights_slice = weights + (kch*kernel_dim*kernel_dim + krow_*kernel_dim+kcol_) * out_channels + poch;
                                 } else if (trans_weight_0132) {
                                   weights_slice = weights + (krow_*kernel_dim*out_channels + kcol_*out_channels + poch) * in_channels + kch;
                                 }
 
-                                const elem_t * in = input + (b *in_row_dim * in_col_dim + ((irow+upad)>>input_dilated) * in_col_dim + ((icol+lpad)>>input_dilated)) * in_stride + kch;
+                                const elem_t * in = input + (b *in_row_dim * in_col_dim + ((irow+upad)>>input_dilated) * in_col_dim + ((icol+lpad)>>input_dilated)) * in_stride + kch; // Input tile pointer.
                                 if (trans_input_3120) {
                                   in = input + (kch * in_row_dim * in_col_dim + ((irow+upad)>>input_dilated) * in_col_dim + ((icol+lpad)>>input_dilated)) * batch_size + b;
                                 }
@@ -2570,13 +2631,13 @@ static void tiled_conv_dw(
 
     // TODO move everything below this into a tiled_conv_outer function to match the tiled_matmul function
 
-    bool no_bias = false;
+    bool no_bias = false; // True when bias should be treated as zero.
     if (bias == NULL) {
         bias = (acc_t*)1;
         no_bias = true;
     }
 
-    bool no_pool = pool_stride == 0;
+    bool no_pool = pool_stride == 0; // Pool stride zero encodes "skip pooling".
     if (no_pool) {
         pool_size = 1;
         pool_stride = 1;
@@ -2611,68 +2672,68 @@ static void tiled_conv_dw(
     }
 #endif
 
-    const size_t st_dram_stride = channels * sizeof(elem_t);
+    const size_t st_dram_stride = channels * sizeof(elem_t); // Store stride in bytes.
     gemmini_extended_config_st(st_dram_stride, act, scale);
 
     gemmini_extended3_config_ex(WEIGHT_STATIONARY, 0, 0, 0, 1, stride, false, false, false);
 
-    const int pool_out_row_dim = (out_row_dim + 2 * pool_padding - pool_size) / pool_stride + 1;
-    const int pool_out_col_dim = (out_col_dim + 2 * pool_padding - pool_size) / pool_stride + 1;
+    const int pool_out_row_dim = (out_row_dim + 2 * pool_padding - pool_size) / pool_stride + 1; // Pooled output rows.
+    const int pool_out_col_dim = (out_col_dim + 2 * pool_padding - pool_size) / pool_stride + 1; // Pooled output cols.
 
     for (int b = 0; b < batch_size; b += batches) {
         for (int porow = 0; porow < pool_out_row_dim; porow += porows) {
-            const int orow = porow * pool_stride - pool_padding;
+            const int orow = porow * pool_stride - pool_padding; // First unpooled output row for this tile.
 
             for (int pocol = 0; pocol < pool_out_col_dim; pocol += pocols) {
-                const int ocol = pocol * pool_stride - pool_padding;
+                const int ocol = pocol * pool_stride - pool_padding; // First unpooled output col for this tile.
 
                 for (int ch = 0; ch < channels; ch++) {
                     for (int krow = 0; krow < kernel_dim; krow += krows) {
-                        const int orow_floored = orow < 0 ? 0 : orow;
-                        int irow = orow_floored * stride + krow - padding;
+                        const int orow_floored = orow < 0 ? 0 : orow; // Output row clamped for input-base calculation.
+                        int irow = orow_floored * stride + krow - padding; // First input row for this kernel tile.
 
                         for (int kcol = 0; kcol < kernel_dim; kcol += kcols) {
-                            const int ocol_floored = ocol < 0 ? 0 : ocol;
-                            int icol = ocol_floored * stride + kcol - padding;
+                            const int ocol_floored = ocol < 0 ? 0 : ocol; // Output col clamped for input-base calculation.
+                            int icol = ocol_floored * stride + kcol - padding; // First input col for this kernel tile.
 
-                            elem_t * out = output + (b * pool_out_row_dim * pool_out_col_dim + porow * pool_out_col_dim + pocol) * channels + ch;
+                            elem_t * out = output + (b * pool_out_row_dim * pool_out_col_dim + porow * pool_out_col_dim + pocol) * channels + ch; // Output tile pointer.
 
                             if (krow + krows < kernel_dim ||
                                     kcol + kcols < kernel_dim) {
                                 out = NULL;
                             }
 
-                            const acc_t * bias_ = bias + ch;
+                            const acc_t * bias_ = bias + ch; // Bias pointer for first reduction tile.
                             if (krow > 0 ||
                                     kcol > 0) {
                                 bias_ = NULL;
                             }
 
-                            const int batches_ = batch_size - b > batches ? batches : batch_size - b;
-                            const int porows_ = pool_out_row_dim - porow > porows ? porows : pool_out_row_dim - porow;
-                            const int pocols_ = pool_out_col_dim - pocol > pocols ? pocols : pool_out_col_dim - pocol;
-                            const int krows_ = kernel_dim - krow > krows ? krows : kernel_dim - krow;
-                            const int kcols_ = kernel_dim - kcol > kcols ? kcols : kernel_dim - kcol;
+                            const int batches_ = batch_size - b > batches ? batches : batch_size - b; // Batch tile size.
+                            const int porows_ = pool_out_row_dim - porow > porows ? porows : pool_out_row_dim - porow; // Pooled-row tile size.
+                            const int pocols_ = pool_out_col_dim - pocol > pocols ? pocols : pool_out_col_dim - pocol; // Pooled-col tile size.
+                            const int krows_ = kernel_dim - krow > krows ? krows : kernel_dim - krow; // Kernel-row tile size.
+                            const int kcols_ = kernel_dim - kcol > kcols ? kcols : kernel_dim - kcol; // Kernel-col tile size.
 
-                            const int ocols_ = pocols_ * pool_stride + pool_size - 1;
-                            const int orows_ = porows_ * pool_stride + pool_size - 1;
+                            const int ocols_ = pocols_ * pool_stride + pool_size - 1; // Unpooled output cols covered.
+                            const int orows_ = porows_ * pool_stride + pool_size - 1; // Unpooled output rows covered.
 
-                            const int plpad = ocol < 0 ? -ocol : 0;
-                            const int prpad = ocol + ocols_ > out_col_dim ? ocol + ocols_ - out_col_dim : 0;
-                            const int pupad = orow < 0 ? -orow : 0;
-                            const int pdpad = orow + orows_ > out_row_dim ? orow + orows_ - out_row_dim : 0;
+                            const int plpad = ocol < 0 ? -ocol : 0; // Left pool padding.
+                            const int prpad = ocol + ocols_ > out_col_dim ? ocol + ocols_ - out_col_dim : 0; // Right pool padding.
+                            const int pupad = orow < 0 ? -orow : 0; // Upper pool padding.
+                            const int pdpad = orow + orows_ > out_row_dim ? orow + orows_ - out_row_dim : 0; // Lower pool padding.
 
-                            const int icols_ = (ocols_ - plpad - prpad) * stride + kcols_ - 1;
-                            const int irows_ = (orows_ - pupad - pdpad) * stride + krows_ - 1;
+                            const int icols_ = (ocols_ - plpad - prpad) * stride + kcols_ - 1; // Input cols covered.
+                            const int irows_ = (orows_ - pupad - pdpad) * stride + krows_ - 1; // Input rows covered.
 
-                            int lpad = icol < 0 ? -icol : 0;
-                            int rpad = icol + icols_ > in_col_dim ? icol + icols_ - in_col_dim : 0;
-                            int upad = irow < 0 ? -irow : 0;
-                            int dpad = irow + irows_ > in_row_dim ? irow + irows_ - in_row_dim : 0;
+                            int lpad = icol < 0 ? -icol : 0; // Left input padding.
+                            int rpad = icol + icols_ > in_col_dim ? icol + icols_ - in_col_dim : 0; // Right input padding.
+                            int upad = irow < 0 ? -irow : 0; // Upper input padding.
+                            int dpad = irow + irows_ > in_row_dim ? irow + irows_ - in_row_dim : 0; // Lower input padding.
 
-                            const elem_t * weights_slice = weights + (ch*kernel_dim + krow) * kernel_dim + kcol;
+                            const elem_t * weights_slice = weights + (ch*kernel_dim + krow) * kernel_dim + kcol; // Depthwise weight tile pointer.
 
-                            const elem_t *in = input + (b * in_row_dim * in_col_dim + (irow+upad) * in_col_dim + (icol+lpad)) * channels + ch;
+                            const elem_t *in = input + (b * in_row_dim * in_col_dim + (irow+upad) * in_col_dim + (icol+lpad)) * channels + ch; // Input tile pointer.
 
                             sp_tiled_conv(
                                 batch_size, in_row_dim, in_col_dim, channels,
@@ -2732,32 +2793,32 @@ static void tiled_conv_stride_auto(
 
         enum tiled_matmul_type_t tiled_conv_type) {
 
-    const bool no_pool = pool_stride == 0;
+    const bool no_pool = pool_stride == 0; // Pool stride zero encodes "skip pooling".
     if (no_pool) {
         pool_size = 1;
         pool_stride = 1;
         pool_padding = 0;
     }
 
-    const int pool_out_row_dim = (out_row_dim + 2 * pool_padding - pool_size) / pool_stride + 1;
-    const int pool_out_col_dim = (out_col_dim + 2 * pool_padding - pool_size) / pool_stride + 1;
+    const int pool_out_row_dim = (out_row_dim + 2 * pool_padding - pool_size) / pool_stride + 1; // Pooled output rows.
+    const int pool_out_col_dim = (out_col_dim + 2 * pool_padding - pool_size) / pool_stride + 1; // Pooled output cols.
 
-    const bool downsample = stride == 2 && kernel_dim == 1 && padding == 0 && no_pool && in_row_dim % 2 == 0 && in_col_dim % 2 == 0;
+    const bool downsample = stride == 2 && kernel_dim == 1 && padding == 0 && no_pool && in_row_dim % 2 == 0 && in_col_dim % 2 == 0; // Specialized 1x1 stride-2 case.
 
     // Tile convolution params
 
     // int args[] = {batch_size, porows, pocols, pochs, krows, kcols, kchs};
-    int args[] = {batch_size, pool_out_row_dim, pool_out_col_dim, out_channels, kernel_dim, kernel_dim, in_channels};
-    const int max_args[] = {batch_size, pool_out_row_dim, pool_out_col_dim, out_channels, kernel_dim, kernel_dim, in_channels};
+    int args[] = {batch_size, pool_out_row_dim, pool_out_col_dim, out_channels, kernel_dim, kernel_dim, in_channels}; // Candidate tile dimensions.
+    const int max_args[] = {batch_size, pool_out_row_dim, pool_out_col_dim, out_channels, kernel_dim, kernel_dim, in_channels}; // Upper bounds for each tile dimension.
 
-    const int orows_idx = 1;
-    const int ocols_idx = 2;
-    const int out_channels_idx = 3;
-    const int in_channels_idx = 6;
+    const int orows_idx = 1; // args index for pooled rows.
+    const int ocols_idx = 2; // args index for pooled cols.
+    const int out_channels_idx = 3; // args index for output channels.
+    const int in_channels_idx = 6; // args index for input channels.
 
     // We divide by 2 for the sake of double-buffering
-    const int max_spad_rows = (BANK_NUM*BANK_ROWS / 2);
-    const int max_acc_rows = (ACC_ROWS / 2);
+    const int max_spad_rows = (BANK_NUM*BANK_ROWS / 2); // Scratchpad rows available with double buffering.
+    const int max_acc_rows = (ACC_ROWS / 2); // Accumulator rows available with double buffering.
 
     int spad_rows = tiled_conv_total_spad_rows(false,
         stride, input_dilation, kernel_dilation, downsample, trans_weight_0132, trans_input_3120,
@@ -3196,15 +3257,15 @@ static void resadd_cpu(const size_t I, const size_t J,
         elem_t * C,
         bool relu) {
 
-	const int minimum = relu ? 0 : elem_t_min;
+    const int minimum = relu ? 0 : elem_t_min; // Saturation lower bound after optional ReLU.
 
     for (size_t i = 0; i < I; i++) {
         for (size_t j = 0; j < J; j++) {
-            const elem_t * a = A + i * stride + j;
-            const elem_t * b = B + i * stride + j;
-            elem_t * c = C + i * stride + j;
+            const elem_t * a = A + i * stride + j; // Input A element pointer.
+            const elem_t * b = B + i * stride + j; // Input B element pointer.
+            elem_t * c = C + i * stride + j; // Output C element pointer.
 
-            acc_t result = MVIN_SCALE(*a, A_scale) + MVIN_SCALE(*b, B_scale);
+            acc_t result = MVIN_SCALE(*a, A_scale) + MVIN_SCALE(*b, B_scale); // Scaled residual sum.
             result = ACC_SCALE(result, C_scale);
             result = result > elem_t_max ? elem_t_max :
                 (result < minimum ? minimum : result);
@@ -3223,10 +3284,10 @@ static void sp_tiled_resadd(const size_t I, const size_t J,
         size_t A_row_stride, size_t B_row_stride, size_t C_row_stride,
         bool relu) {
 
-    int pad_I = ((I%DIM) == 0) ? 0 : DIM - (I % DIM);
-    int pad_J = ((J%DIM) == 0) ? 0 : DIM - (J % DIM);
-    int tile_I = (I%DIM == 0) ? (int)(I/DIM) : (int)(I/DIM) + 1;
-    int tile_J = (J%DIM == 0) ? (int)(J/DIM) : (int)(J/DIM) + 1;
+    int pad_I = ((I%DIM) == 0) ? 0 : DIM - (I % DIM); // Invalid rows in final tile.
+    int pad_J = ((J%DIM) == 0) ? 0 : DIM - (J % DIM); // Invalid cols in final tile.
+    int tile_I = (I%DIM == 0) ? (int)(I/DIM) : (int)(I/DIM) + 1; // Tile rows in DIM blocks.
+    int tile_J = (J%DIM == 0) ? (int)(J/DIM) : (int)(J/DIM) + 1; // Tile cols in DIM blocks.
     //printf("pad I: %d, pad_J: %d, tile_I: %d, tile_J: %d\n", pad_I, pad_J, tile_I, tile_J);
     gemmini_loop_ws(tile_I, tile_J, 0, pad_I, pad_J, 0, A, B, NULL, C, A_row_stride, B_row_stride, 0, C_row_stride, false, false, false, false, false, relu, 0, 0, true);
     /*
@@ -3303,12 +3364,12 @@ static void tiled_resadd(const size_t I, const size_t J,
 
     for (size_t i = 0; i < I; i += tile_I) {
         for (size_t j = 0; j < J; j += tile_J) {
-            const size_t I_tile = i + tile_I <= I ? tile_I : I - i;
-            const size_t J_tile = j + tile_J <= J ? tile_J : J - j;
+            const size_t I_tile = i + tile_I <= I ? tile_I : I - i; // Rows in this residual tile.
+            const size_t J_tile = j + tile_J <= J ? tile_J : J - j; // Cols in this residual tile.
 
-            const elem_t * a = A + i * stride + j;
-            const elem_t * b = B + i * stride + j;
-            elem_t * c = C + i * stride + j;
+            const elem_t * a = A + i * stride + j; // A tile pointer.
+            const elem_t * b = B + i * stride + j; // B tile pointer.
+            elem_t * c = C + i * stride + j; // C tile pointer.
 
             sp_tiled_resadd(I_tile, J_tile,
                     A_scale, B_scale, a, b, c,
@@ -3339,10 +3400,10 @@ static void tiled_resadd_stride_auto(const size_t I, const size_t J,
         return;
     }
 
-    size_t tile_I = I, tile_J = J;
+    size_t tile_I = I, tile_J = J; // Candidate residual tile size.
 
     // size_t total_spad_rows = 2 * (tile_I / DIM + (tile_I % DIM != 0))*DIM * (tile_J / DIM + (tile_J % DIM != 0));
-    size_t total_acc_rows = (tile_I / DIM + (tile_I % DIM != 0))*DIM * (tile_J / DIM + (tile_J % DIM != 0));
+    size_t total_acc_rows = (tile_I / DIM + (tile_I % DIM != 0))*DIM * (tile_J / DIM + (tile_J % DIM != 0)); // Accumulator rows required.
 
     // TODO this is a very inefficient way of doing this...
     while (total_acc_rows > ACC_ROWS / 2) {
@@ -3393,14 +3454,14 @@ _STATIC void tiled_resadd_auto(const size_t I, const size_t J,
 // CPU reference global average over a square spatial dimension.
 static void global_average_cpu(const elem_t * input, elem_t * output,
     int batches, int channels, int dim) {
-  const int count = dim * dim;
+  const int count = dim * dim; // Number of spatial elements per channel.
 
   for (int batch = 0; batch < batches; batch++) {
     for (int channel = 0; channel < channels; channel++) {
-      acc_t sum = 0;
+      acc_t sum = 0; // Accumulated channel sum.
       for (int row = 0; row < dim; row++) {
         for (int col = 0; col < dim; col++) {
-          size_t pixel = batch * dim * dim + row * dim + col;
+          size_t pixel = batch * dim * dim + row * dim + col; // Flattened spatial pixel index.
 
           sum += input[pixel * channels + channel];
         }
@@ -3419,9 +3480,9 @@ static void global_average_cpu(const elem_t * input, elem_t * output,
 // Issue one channel tile of global-average accumulation through Gemmini.
 static void sp_tiled_global_average(const elem_t * input, elem_t * output,
     int batches, int channels, int dim, int channel_tile_size) {
-  const uint32_t C_acc_addr_start = ((uint32_t)1 << 31);
+  const uint32_t C_acc_addr_start = ((uint32_t)1 << 31); // Accumulator base address for channel sums.
 
-  size_t blocks = channel_tile_size/DIM + (channel_tile_size % DIM != 0);
+  size_t blocks = channel_tile_size/DIM + (channel_tile_size % DIM != 0); // Channel blocks moved per mvin.
   if (blocks > MAX_BLOCK_LEN) blocks = MAX_BLOCK_LEN;
 
   for (int channel = 0; channel < channel_tile_size; channel += blocks*DIM) {
@@ -3429,17 +3490,17 @@ static void sp_tiled_global_average(const elem_t * input, elem_t * output,
       for (int col = 0; col < dim; col++) {
         const elem_t * in = input +
           (row * dim + col) * channels +
-          channel;
+          channel; // Input channel slice pointer.
 
         const uint32_t acc_addr_start = C_acc_addr_start |
-          ((row != 0 || col != 0) << 30);
+          ((row != 0 || col != 0) << 30); // Set accumulate bit after the first pixel.
 
-        const uint32_t acc_addr = acc_addr_start + channel / DIM;
+        const uint32_t acc_addr = acc_addr_start + channel / DIM; // Accumulator row for this channel block.
 
         const size_t cols = channel + blocks*DIM <= channel_tile_size ?
           blocks*DIM : channel_tile_size - channel;
 
-        const size_t rows = 1;
+        const size_t rows = 1; // Global average accumulates one row of channels.
 
         gemmini_extended_mvin(in, acc_addr, cols, rows);
       }
@@ -3447,14 +3508,14 @@ static void sp_tiled_global_average(const elem_t * input, elem_t * output,
   }
 
   for (int channel = 0; channel < channel_tile_size; channel += DIM) {
-    elem_t * out = output + channel;
+    elem_t * out = output + channel; // Output channel slice pointer.
 
-    const uint32_t acc_addr = C_acc_addr_start + channel / DIM;
+    const uint32_t acc_addr = C_acc_addr_start + channel / DIM; // Accumulator source row.
 
     const size_t cols = channel + DIM <= channel_tile_size ?
       DIM : channel_tile_size - channel;
 
-    const size_t rows = 1; // TODO we should move out more than just one row here
+    const size_t rows = 1; // TODO we should move out more than just one row here.
 
     gemmini_extended_mvout(out, acc_addr, cols, rows);
   }
@@ -3491,9 +3552,9 @@ static void tiled_global_average_auto(const elem_t * input, elem_t * output,
     return global_average_cpu(input, output, batches, channels, dim);
   }
 
-  int channel_tile_size = channels;
+  int channel_tile_size = channels; // Candidate number of channels processed together.
 
-  int acc_rows = channel_tile_size / DIM + (channel_tile_size % DIM != 0);
+  int acc_rows = channel_tile_size / DIM + (channel_tile_size % DIM != 0); // Accumulator rows needed by candidate tile.
   while (acc_rows > ACC_ROWS) {
     channel_tile_size--;
     acc_rows = channel_tile_size / DIM + (channel_tile_size % DIM != 0);
@@ -3511,42 +3572,42 @@ static void sp_tiled_norm(const size_t I, const size_t J,
         size_t A_row_stride, size_t C_row_stride,
         int act) {
 #ifdef HAS_NORMALIZATIONS
-    size_t A_blocks = (J/DIM + (J % DIM != 0));
+    size_t A_blocks = (J/DIM + (J % DIM != 0)); // Input blocks moved from accumulator memory.
     if (A_blocks > MAX_BLOCK_LEN_ACC) A_blocks = MAX_BLOCK_LEN_ACC;
-    size_t C_blocks = (J/DIM + (J % DIM != 0));
+    size_t C_blocks = (J/DIM + (J % DIM != 0)); // Output blocks moved back to DRAM.
     if (C_blocks > MAX_BLOCK_LEN) C_blocks = MAX_BLOCK_LEN;
 
-    const uint32_t D_sp_addr_start = 1 << (ADDR_LEN-1);
-    const uint32_t C_sp_addr_start = 3 << (ADDR_LEN-2);
+    const uint32_t D_sp_addr_start = 1 << (ADDR_LEN-1); // Accumulator input base row.
+    const uint32_t C_sp_addr_start = 3 << (ADDR_LEN-2); // Accumulator output base row.
 
-    const size_t rounded_up_J = (J / DIM + (J % DIM != 0)) * DIM;
+    const size_t rounded_up_J = (J / DIM + (J % DIM != 0)) * DIM; // J rounded to DIM for address arithmetic.
 
     for (size_t i = 0; i < I; i += DIM) {
         // Mvin
         for (size_t j = 0; j < J; j += A_blocks * DIM) {
-            const size_t cols = j + A_blocks*DIM <= J ? A_blocks*DIM : J-j;
-            const size_t rows = i + DIM <= I ? DIM : I-i;
+            const size_t cols = j + A_blocks*DIM <= J ? A_blocks*DIM : J-j; // Input columns in this mvin.
+            const size_t rows = i + DIM <= I ? DIM : I-i; // Input rows in this mvin.
 
-            const acc_t * const A_dram_addr = in + i * A_row_stride + j;
-            const uint32_t A_sp_addr = D_sp_addr_start + i * (rounded_up_J/DIM) + j;
+            const acc_t * const A_dram_addr = in + i * A_row_stride + j; // Source accumulator tensor pointer.
+            const uint32_t A_sp_addr = D_sp_addr_start + i * (rounded_up_J/DIM) + j; // Accumulator destination row.
 
             gemmini_extended_mvin(A_dram_addr, A_sp_addr, cols, rows);
         }
 
         // Mvout
         if (act == LAYERNORM) {
-            uint32_t norm_cmds[][2] = {{1,2},{3,4},{0,0}};
-            const int norm_cmds_size = sizeof(norm_cmds) / sizeof(norm_cmds[0]);
-            const size_t rows = I - i < DIM ? I - i : DIM;
+            uint32_t norm_cmds[][2] = {{1,2},{3,4},{0,0}}; // Per-pass commands for mean/variance/final output.
+            const int norm_cmds_size = sizeof(norm_cmds) / sizeof(norm_cmds[0]); // Number of normalization passes.
+            const size_t rows = I - i < DIM ? I - i : DIM; // Rows in this tile.
             for (size_t row = 0; row < rows; row += NORM_STAT_IDS) {
                 const size_t stat_ids = rows - row > NORM_STAT_IDS ?
                     NORM_STAT_IDS : rows - row;
                 for (int cmd = 0; cmd < norm_cmds_size; cmd++) {
                     for (size_t stat_id = 0; stat_id < stat_ids; stat_id++) {
                         gemmini_config_norm(0, 0, 0, 0, stat_id, 0, 0);
-                        const size_t r = row + stat_id;
+                        const size_t r = row + stat_id; // Row/statistics lane within tile.
                         for (size_t jj = 0; jj < J; jj += C_blocks * DIM) {
-                            uint32_t norm_C_sp_addr = C_sp_addr_start + i * (rounded_up_J/DIM) + jj + r;
+                            uint32_t norm_C_sp_addr = C_sp_addr_start + i * (rounded_up_J/DIM) + jj + r; // Encoded normalization output row.
                             if (jj + C_blocks*DIM >= J) {
                                 norm_C_sp_addr |= (norm_cmds[cmd][1] << 26); // Final mean/inv-std-dev calculation
                             } else {
@@ -3554,17 +3615,17 @@ static void sp_tiled_norm(const size_t I, const size_t J,
                             }
                             void * const C_dram_addr = (int8_t*)out +
                                 (i*C_row_stride + jj) * sizeof(elem_t) +
-                                r * C_row_stride * sizeof(elem_t);
-                            const size_t cols = J - jj < C_blocks * DIM ? J - jj : C_blocks * DIM;
+                                r * C_row_stride * sizeof(elem_t); // DRAM output pointer for one normalized row slice.
+                            const size_t cols = J - jj < C_blocks * DIM ? J - jj : C_blocks * DIM; // Output columns for this mvout.
                             gemmini_extended_mvout(C_dram_addr, norm_C_sp_addr, cols, 1);
                         }
                     }
                 }
             }
         } else if (act == SOFTMAX) {
-            uint32_t norm_cmds[][2] = {{5,5},{6,7},{0,0}};
-            const int norm_cmds_size = sizeof(norm_cmds) / sizeof(norm_cmds[0]);
-            const size_t rows = I - i < DIM ? I - i : DIM;
+            uint32_t norm_cmds[][2] = {{5,5},{6,7},{0,0}}; // Per-pass commands for softmax max/exp/final output.
+            const int norm_cmds_size = sizeof(norm_cmds) / sizeof(norm_cmds[0]); // Number of normalization passes.
+            const size_t rows = I - i < DIM ? I - i : DIM; // Rows in this tile.
             for (size_t row = 0; row < rows; row += NORM_STAT_IDS) {
                 const size_t stat_ids = rows - row > NORM_STAT_IDS ?
                     NORM_STAT_IDS : rows - row;
@@ -3572,9 +3633,9 @@ static void sp_tiled_norm(const size_t I, const size_t J,
                     for (size_t stat_id = 0; stat_id < stat_ids; stat_id++) {
                         // set stat id only
                         gemmini_config_norm(0, 0, 1, 0, stat_id, 0, 0);
-                        const size_t r = row + stat_id;
+                        const size_t r = row + stat_id; // Row/statistics lane within tile.
                         for (size_t jj = 0; jj < J; jj += C_blocks * DIM) {
-                            uint32_t norm_C_sp_addr = C_sp_addr_start + i * (rounded_up_J/DIM) + jj + r;
+                            uint32_t norm_C_sp_addr = C_sp_addr_start + i * (rounded_up_J/DIM) + jj + r; // Encoded normalization output row.
                             if (jj + C_blocks*DIM >= J) {
                                 norm_C_sp_addr |= (norm_cmds[cmd][1] << 26); // Final mean/inv-std-dev calculation
                             } else {
@@ -3582,8 +3643,8 @@ static void sp_tiled_norm(const size_t I, const size_t J,
                             }
                             void * const C_dram_addr = (int8_t*)out +
                                 (i*C_row_stride + jj) * sizeof(elem_t) +
-                                r * C_row_stride * sizeof(elem_t);
-                            const size_t cols = J - jj < C_blocks * DIM ? J - jj : C_blocks * DIM;
+                                r * C_row_stride * sizeof(elem_t); // DRAM output pointer for one normalized row slice.
+                            const size_t cols = J - jj < C_blocks * DIM ? J - jj : C_blocks * DIM; // Output columns for this mvout.
                             gemmini_extended_mvout(C_dram_addr, norm_C_sp_addr, cols, 1);
                         }
                     }
@@ -3614,16 +3675,16 @@ static void tiled_norm(const size_t I, const size_t J,
     gemmini_extended4_config_ld(J * sizeof(acc_t), MVIN_SCALE_IDENTITY, false, DIM, 1);
 
     if (act == SOFTMAX) {
-        const scale_t a = 0.3585;
-        const scale_t b = 1.353;
-        const scale_t c = 0.344;
+        const scale_t a = 0.3585; // Softmax integer exponential approximation coefficient.
+        const scale_t b = 1.353; // Softmax integer exponential approximation coefficient.
+        const scale_t c = 0.344; // Softmax integer exponential approximation coefficient.
 
         // TODO let bert-scale be set by the programmer
-        acc_scale_t bert_scale = 0.05;
-        const acc_t qln2 = (int) (0.693147 / bert_scale);
-        const acc_t qln2_inv = 65536 / qln2;
-        const acc_t qb = b / bert_scale;
-        const acc_t qc = c / (a*bert_scale*bert_scale);
+        acc_scale_t bert_scale = 0.05; // Default quantization scale used by current softmax path.
+        const acc_t qln2 = (int) (0.693147 / bert_scale); // Quantized ln(2).
+        const acc_t qln2_inv = 65536 / qln2; // Fixed-point reciprocal of qln2.
+        const acc_t qb = b / bert_scale; // Quantized polynomial coefficient b.
+        const acc_t qc = c / (a*bert_scale*bert_scale); // Quantized polynomial coefficient c/a.
 
         gemmini_config_norm(qln2, 0, 0, 1, 0, qb, qc);
         gemmini_config_norm(qln2_inv, 1, 0, 1, 0, qb, qc);
@@ -3631,11 +3692,11 @@ static void tiled_norm(const size_t I, const size_t J,
 
     for (size_t i = 0; i < I; i += tile_I) {
         for (size_t j = 0; j < J; j += tile_J) {
-            const size_t I_tile = i + tile_I <= I ? tile_I : I - i;
-            const size_t J_tile = j + tile_J <= J ? tile_J : J - j;
+            const size_t I_tile = i + tile_I <= I ? tile_I : I - i; // Rows in this normalization tile.
+            const size_t J_tile = j + tile_J <= J ? tile_J : J - j; // Columns in this normalization tile.
 
-            const acc_t * in_ = in + i * J + j;
-            elem_t * out_ = out + i * J + j;
+            const acc_t * in_ = in + i * J + j; // Input tile pointer.
+            elem_t * out_ = out + i * J + j; // Output tile pointer.
 
             sp_tiled_norm(I_tile, J_tile,
                     in_, out_,
@@ -3655,8 +3716,8 @@ _STATIC void tiled_norm_auto(const size_t I, const size_t J,
         int act,
         enum tiled_matmul_type_t norm_type) {
 
-    size_t tile_I = I, tile_J = J;
-    size_t total_acc_rows = (tile_I / DIM + (tile_I % DIM != 0))*DIM * (tile_J / DIM + (tile_J % DIM != 0));
+    size_t tile_I = I, tile_J = J; // Candidate normalization tile size.
+    size_t total_acc_rows = (tile_I / DIM + (tile_I % DIM != 0))*DIM * (tile_J / DIM + (tile_J % DIM != 0)); // Accumulator rows required.
 
     while (total_acc_rows > ACC_ROWS) {
         if (tile_I > 1) {
