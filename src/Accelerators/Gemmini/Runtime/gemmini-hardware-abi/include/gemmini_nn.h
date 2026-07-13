@@ -1,6 +1,13 @@
 #ifndef GEMMINI_NN_H
 #define GEMMINI_NN_H
 
+// Neural-network convenience wrappers layered on top of gemmini.h.
+//
+// These helpers package common matmul/convolution/im2col flows used by
+// upstream Gemmini examples.  ONNX-MLIR's runtime generally calls gemmini.h
+// directly, but this file documents the higher-level ABI expected by legacy
+// neural-network tests.
+
 // This upstream Gemmini helper is C-only: several entry points use GNU C
 // variable-length array parameters and should be checked with a C compiler.
 
@@ -13,6 +20,8 @@
 #include "include/gemmini.h"
 #include "include/gemmini_testutils.h"
 
+// Convolution layer metadata and derived GEMM dimensions.
+// I/J/K are the lowered matrix dimensions used after im2col-style packing.
 struct ConvParams {
     int batch_size;
     int in_row_dim;
@@ -38,6 +47,7 @@ struct ConvParams {
     int I, J, K;
 };
 
+// Fully connected layer metadata and derived GEMM dimensions.
 struct FcParams {
     int batch_size;
     int in_features;
@@ -48,6 +58,7 @@ struct FcParams {
     int I, J, K;
 };
 
+// Print value histograms for statically-sized image or matrix arrays.
 #define HIST_IMAGES(IMAGES) \
     for (int num = -128; num <= 127; num++) { \
         int count = 0; \
@@ -80,8 +91,8 @@ struct FcParams {
             printf("%d: %d times\n", num, count); \
     }
 
-// This function runs a tiled matrix multiplication, with explicit tiling
-// factors
+// Run a tiled matrix multiplication with explicit tiling factors.
+// When check is true, rerun the layer on the CPU path and compare results.
 static void tiled_matmul_nn(size_t dim_I, size_t dim_J, size_t dim_K,
         const elem_t A[dim_I][dim_K], const elem_t B[dim_K][dim_J],
         const void * D, elem_t C[dim_I][dim_J],
@@ -124,9 +135,8 @@ static void tiled_matmul_nn(size_t dim_I, size_t dim_J, size_t dim_K,
     }
 }
 
-// This function runs a tiled matrix multiplication, with automatically
-// calculated tiling factors
-// With default auto-stride calc (A_stride = dim_K, B_stride/C_stride/D_stride = dim_J)
+// Run a tiled matrix multiplication with automatically calculated tiling.
+// Uses default row strides: A_stride = dim_K and B/C/D stride = dim_J.
 static void tiled_matmul_nn_auto(size_t dim_I, size_t dim_J, size_t dim_K, 
         const elem_t A[dim_I][dim_K], const elem_t B[dim_K][dim_J],
         const void * D, elem_t C[dim_I][dim_J],
@@ -167,8 +177,7 @@ static void tiled_matmul_nn_auto(size_t dim_I, size_t dim_J, size_t dim_K,
     }
 }
 
-// need to specify stride
-// auto tiling calc
+// Run auto-tiled matmul when A/B/C use caller-specified row strides.
 static void tiled_matmul_nn_stride_auto(size_t dim_I, size_t dim_J, size_t dim_K,
         const size_t A_stride, const size_t B_stride, const size_t C_stride,
         const elem_t * A, const elem_t * B, const void * D, const elem_t * C,
@@ -186,6 +195,7 @@ static void tiled_matmul_nn_stride_auto(size_t dim_I, size_t dim_J, size_t dim_K
         0,
         tiled_matmul_type);
 }
+// CPU depthwise-convolution reference used by tests.
 static void conv_dw(size_t I, size_t J,
     const size_t batch_size, const size_t channels,
     const size_t in_row_dim, const size_t in_col_dim,
@@ -244,6 +254,7 @@ static void conv_dw(size_t I, size_t J,
     }
 }
 
+// Depthwise-convolution reference that scatters into an existing col2im buffer.
 static void conv_dw_with_col2im(size_t prev_I, size_t prev_J, size_t I, size_t J,
     const size_t batch_size, const size_t channels,
     const size_t out_row_dim, const size_t out_col_dim, const size_t kernel_size,
@@ -304,6 +315,7 @@ static void conv_dw_with_col2im(size_t prev_I, size_t prev_J, size_t I, size_t J
     }
 }
 
+// Pack NHWC image data into the matrix layout consumed by Gemmini matmul.
 static void im2col(size_t batch_size, size_t channels, size_t im_row_dim, size_t im_col_dim,
     size_t I, size_t K,
     const elem_t input[batch_size][im_row_dim][im_col_dim][channels],
@@ -341,6 +353,7 @@ static void im2col(size_t batch_size, size_t channels, size_t im_row_dim, size_t
     }
 }
 
+// Pack im2col data while preserving a previous col2im accumulation buffer.
 static void im2col_with_col2im(size_t prev_I, size_t prev_J,
     size_t next_I, size_t next_K,
     const elem_t input[prev_I][prev_J],

@@ -1,9 +1,17 @@
 #ifndef GEMMINI_PARAMS_H
 #define GEMMINI_PARAMS_H
 
+// Hardware-configuration constants for the bundled Gemmini ABI.
+//
+// These values must match the Gemmini RTL used by the simulator/target.  The
+// ONNX-MLIR runtime consumes them indirectly through gemmini.h to determine
+// scratchpad sizes, accumulator sizes, element types, scaling types, and the
+// custom instruction slot used for RoCC commands.
+
 #include <stdint.h>
 #include <limits.h>
 
+// RoCC custom instruction slot and systolic-array/scratchpad dimensions.
 #define XCUSTOM_ACC 3
 #define DIM 16
 #define ADDR_LEN 32
@@ -14,12 +22,14 @@
 #define MAX_BLOCK_LEN (MAX_BYTES/(DIM*1))
 #define MAX_BLOCK_LEN_ACC (MAX_BYTES/(DIM*4))
 
+// Element, accumulator, and full-product types used by this hardware profile.
 typedef int8_t elem_t;
 static const elem_t elem_t_max = 127;
 static const elem_t elem_t_min = -128;
 typedef int32_t acc_t;
 typedef int64_t full_t;
 
+// Runtime scaling types for move-in and accumulator move-out paths.
 #define HAS_MVIN_SCALE
 typedef float scale_t;
 typedef uint32_t scale_t_bits;
@@ -30,9 +40,11 @@ typedef uint32_t scale_acc_t_bits;
 typedef float acc_scale_t;
 typedef uint32_t acc_scale_t_bits;
 
+// Align static buffers to whole Gemmini rows.
 #define row_align(blocks) __attribute__((aligned(blocks*DIM*sizeof(elem_t))))
 #define row_align_acc(blocks) __attribute__((aligned(blocks*DIM*sizeof(acc_t))))
 
+// Identity scale constants used when an operation should not rescale data.
 #define MVIN_SCALE_IDENTITY 1.0
 
 #define ACC_SCALE_IDENTITY 1.0
@@ -65,6 +77,7 @@ typedef uint32_t acc_scale_t_bits;
     (((shift) == 0 ? 0 : (((x) >> ((shift)-1)) & 1)) & \
          ((((shift) <= 1 ? 0 : ((x) & ((1 << ((shift)-1)) - 1))) != 0) | (((x) >> (shift)) & 1)))) : ((x) << (-(shift))))
 
+// Scale-and-saturate helpers used by CPU fallbacks and Gemmini staging code.
 #define ACC_SCALE(x, scale) \
     ({float y = ROUND_NEAR_EVEN((x) * (scale)); y > INT8_MAX ? INT8_MAX : (y < INT8_MIN ? INT8_MIN : (acc_t)y);})
 
@@ -80,6 +93,7 @@ typedef uint32_t acc_scale_t_bits;
 #define ACC_READ_SMALL_WIDTH
 #define ACC_READ_FULL_WIDTH
 
+// Enables optimized first-layer convolution mvin patterns in gemmini.h.
 #define HAS_FIRST_LAYER_OPTIMIZATIONS
 
 #endif // GEMMINI_PARAMS_H

@@ -3,6 +3,13 @@
 #ifndef SRC_MAIN_C_GEMMINI_TESTUTILS_H
 #define SRC_MAIN_C_GEMMINI_TESTUTILS_H
 
+// Test-only helpers from upstream Gemmini.
+//
+// These functions build CPU golden results, print matrices, compare matrices,
+// and read cycle counters for low-level Gemmini tests.  They are not used by
+// ONNX-MLIR's production runtime path, but gemmini_nn.h includes them for
+// optional correctness checks.
+
 #undef abs
 
 #include <stdint.h>
@@ -26,7 +33,9 @@
 
 // #define GEMMINI_ASSERTIONS
 
-// Matmul utility functions
+// ===--- CPU golden matmul helpers ---===
+
+// Compute full-precision C = A*B + D for one DIM x DIM tile.
 static void matmul(elem_t A[DIM][DIM], elem_t B[DIM][DIM], elem_t D[DIM][DIM], full_t C_full[DIM][DIM]) {
   for (size_t r = 0; r < DIM; r++)
     for (size_t c = 0; c < DIM; c++) {
@@ -36,6 +45,7 @@ static void matmul(elem_t A[DIM][DIM], elem_t B[DIM][DIM], elem_t D[DIM][DIM], f
     }
 }
 
+// Compute C = A*B + D and keep the result in elem_t precision.
 static void matmul_short(elem_t A[DIM][DIM], elem_t B[DIM][DIM], elem_t D[DIM][DIM], elem_t C[DIM][DIM]) {
   for (size_t r = 0; r < DIM; r++)
     for (size_t c = 0; c < DIM; c++) {
@@ -45,6 +55,7 @@ static void matmul_short(elem_t A[DIM][DIM], elem_t B[DIM][DIM], elem_t D[DIM][D
     }
 }
 
+// Compute full-precision C = A*B + D when D is already full_t.
 static void matmul_full(elem_t A[DIM][DIM], elem_t B[DIM][DIM], full_t D[DIM][DIM], full_t C_full[DIM][DIM]) {
   // Identical to the other matmul function, but with a 64-bit bias
   for (size_t r = 0; r < DIM; r++)
@@ -55,6 +66,9 @@ static void matmul_full(elem_t A[DIM][DIM], elem_t B[DIM][DIM], full_t D[DIM][DI
     }
 }
 
+// Variants below mirror the same matmul equations with A, B, or both operands
+// interpreted as transposed.  They are useful for checking Gemmini transpose
+// flags against CPU reference results.
 static void matmul_A_transposed(elem_t A[DIM][DIM], elem_t B[DIM][DIM], elem_t D[DIM][DIM], full_t C_full[DIM][DIM]) {
   for (size_t r = 0; r < DIM; r++)
     for (size_t c = 0; c < DIM; c++) {
@@ -136,6 +150,7 @@ static void matmul_full_AB_transposed(elem_t A[DIM][DIM], elem_t B[DIM][DIM], fu
     }
 }
 
+// Add two full-precision matrices.
 static void matadd(full_t sum[DIM][DIM], full_t m1[DIM][DIM], full_t m2[DIM][DIM]) {
   for (size_t r = 0; r < DIM; r++)
     for (size_t c = 0; c < DIM; c++)
@@ -143,6 +158,7 @@ static void matadd(full_t sum[DIM][DIM], full_t m1[DIM][DIM], full_t m2[DIM][DIM
 }
 
 // THIS IS A ROUNDING SHIFT! It also performs a saturating cast
+// Convert full-precision results back to elem_t using a rounded right shift.
 static void matshift(full_t full[DIM][DIM], elem_t out[DIM][DIM], int shift) {
   for (size_t r = 0; r < DIM; r++)
     for (size_t c = 0; c < DIM; c++) {
@@ -159,6 +175,7 @@ static void matshift(full_t full[DIM][DIM], elem_t out[DIM][DIM], int shift) {
     }
 }
 
+// Convert full-precision results back to elem_t using a scale factor.
 static void matscale(full_t full[DIM][DIM], elem_t out[DIM][DIM], acc_scale_t scale) {
   for (size_t r = 0; r < DIM; r++)
     for (size_t c = 0; c < DIM; c++) {
@@ -175,18 +192,21 @@ static void matscale(full_t full[DIM][DIM], elem_t out[DIM][DIM], acc_scale_t sc
     }
 }
 
+// Apply ReLU to one tile.
 static void matrelu(elem_t in[DIM][DIM], elem_t out[DIM][DIM]) {
   for (size_t r = 0; r < DIM; r++)
     for (size_t c = 0; c < DIM; c++)
       out[r][c] = in[r][c] > 0 ? in[r][c] : 0;
 }
 
+// Transpose one DIM x DIM tile.
 static void transpose(elem_t in[DIM][DIM], elem_t out[DIM][DIM]) {
   for (size_t r = 0; r < DIM; r++)
     for (size_t c = 0; c < DIM; c++)
       out[c][r] = in[r][c];
 }
 
+// Deterministic test pseudo-random generator used by upstream tests.
 int rand() {
   static uint32_t x = 777;
   x = x * 1664525 + 1013904223;
@@ -195,6 +215,7 @@ int rand() {
 
 
 #ifdef ELEM_T_IS_FLOAT
+// Generate a deterministic floating-point test value.
 double rand_double() {
     double a = (double)(rand() % 128) / (double)(1 + (rand() % 64));
     double b = (double)(rand() % 128) / (double)(1 + (rand() % 64));
@@ -202,6 +223,7 @@ double rand_double() {
 }
 #endif
 
+// Print elem_t and acc_t matrices in the representation used by test logs.
 static void printMatrix(elem_t m[DIM][DIM]) {
   for (size_t i = 0; i < DIM; ++i) {
     for (size_t j = 0; j < DIM; ++j)
@@ -226,6 +248,7 @@ static void printMatrixAcc(acc_t m[DIM][DIM]) {
   }
 }
 
+// Compare two elem_t matrices, treating NaN values as equal in float configs.
 static int is_equal(elem_t x[DIM][DIM], elem_t y[DIM][DIM]) {
   for (size_t i = 0; i < DIM; ++i)
     for (size_t j = 0; j < DIM; ++j) {
@@ -242,6 +265,7 @@ static int is_equal(elem_t x[DIM][DIM], elem_t y[DIM][DIM]) {
   return 1;
 }
 
+// Compare x against the transpose of y.
 static int is_equal_transposed(elem_t x[DIM][DIM], elem_t y[DIM][DIM]) {
   for (size_t i = 0; i < DIM; ++i)
     for (size_t j = 0; j < DIM; ++j) {
@@ -259,6 +283,7 @@ static int is_equal_transposed(elem_t x[DIM][DIM], elem_t y[DIM][DIM]) {
 }
 
 // This is a GNU extension known as statment expressions
+// Compare rectangular matrix prefixes with dimensions known at call site.
 #define MAT_IS_EQUAL(dim_i, dim_j, x, y) \
     ({int result = 1; \
       for (size_t i = 0; i < dim_i; i++) \
@@ -270,6 +295,7 @@ static int is_equal_transposed(elem_t x[DIM][DIM], elem_t y[DIM][DIM]) {
         } \
       result;})
 
+// Read the RISC-V cycle CSR for test timing.
 static uint64_t read_cycles() {
     uint64_t cycles;
     asm volatile ("rdcycle %0" : "=r" (cycles));

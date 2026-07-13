@@ -120,6 +120,23 @@ The runtime is only compiled for RISC-V targets. On RISC-V, CMake verifies that
 `gemmini.h` and `rocc-software/src/xcustom.h` exist, enables the runtime, and
 adds a static `RuntimeGemmini` library from `OMRuntimeGemmini.cpp`.
 
+CMake variable reference:
+
+- `GEMMINI_RUNTIME_ENABLED`: parent-scope flag indicating whether the runtime
+  library was added for the current target.
+- `GEMMINI_ROOT`: Chipyard/Gemmini repository root used as a fallback source for
+  Gemmini RoCC headers.
+- `GEMMINI_SIM_PATH`: environment variable used to initialize `GEMMINI_ROOT`
+  when available.
+- `GEMMINI_ROCC_TESTS_CANDIDATES`: ordered list of possible ABI roots.
+- `GEMMINI_ROCC_TESTS_DIR`: selected Gemmini ABI root containing both
+  `include/gemmini.h` and `rocc-software/src/xcustom.h`.
+- `GEMMINI_ROCC_INCLUDE_DIR`: selected include directory containing
+  `gemmini.h`.
+- `ONNX_MLIR_SRC_ROOT`: optional ONNX-MLIR source root used to add another ABI
+  search candidate.
+- `candidate`: loop variable for each ABI directory probe.
+
 ### `FILES_EXPLAINED.md`
 
 Human-readable inventory of the Gemmini runtime directory.
@@ -214,6 +231,158 @@ Main content by section:
 In short, this file is both the real Gemmini hardware dispatch layer for the
 supported int8 operations and the compatibility layer for surrounding ONNX ops
 that compiled models still need at runtime.
+
+#### Function Reference
+
+Trace helpers:
+
+- `gemminiTraceEnabled`: checks `GEMMINI_TRACE`; tracing is enabled unless the
+  variable is set to `0`.
+- `traceTensorDTypeName`: converts ONNX-MLIR dtype ids to short names such as
+  `f32`, `f16`, `i8`, and `i32`.
+- `traceTensorShape`: prints a tensor's dtype, shape, and element count.
+- `traceTensorStats`: prints min, max, mean, nonzero count, NaN count, and Inf
+  count for supported tensor types.
+- `traceTensorShapeStats`: prints both shape and scalar statistics.
+- `traceF32BufferStats`: prints scalar statistics for a raw float buffer.
+- `traceConvF32Shape`: prints the compact NCHW convolution shape summary.
+
+Scalar decode and zero-point helpers:
+
+- `isNoneScalarOrVectorI8Tensor`: validates optional int8 zero-point tensors.
+- `loadOptionalScalarI8`: reads an optional scalar int8 zero-point, defaulting
+  to zero when absent.
+- `loadScalarF32`: reads a required scalar float32 tensor.
+- `getZeroPointSpan`: distinguishes scalar zero-points from vector zero-points.
+- `getZeroPointValue`: reads the scalar or indexed vector zero-point.
+- `decodeF32Bits`: reconstructs a float32 value passed as raw bits in an int64.
+
+Gemmini matmul and quantization helpers:
+
+- `om_gemmini_tiled_matmul_i8i8acc32_ws`: calls Gemmini `tiled_matmul_auto` in
+  weight-stationary mode for int8-by-int8 accumulation into int32.
+- `applyZeroPointCorrection`: applies ONNX MatMulInteger zero-point correction
+  after raw hardware matmul.
+- `quantizeSymmetricI8`: maps a float value to signed int8 using symmetric
+  scaling and saturation.
+- `dotProductF32`: computes a strided scalar float dot product.
+- `dequantizedAccF32`: rescales an int32 Gemmini accumulator back to float32.
+- `flattenedLeadingOffset`: maps a flattened leading-index back to a physical
+  tensor memory offset.
+- `om_gemmini_quantized_matmul_f32_ws`: quantizes f32 matrices, runs Gemmini
+  int8 matmul, and returns the accumulator plus combined output scale.
+- `maxAbsF16`: computes the maximum absolute value of f16 data after conversion
+  to f32.
+
+Layout and convolution helpers:
+
+- `packOIHWtoHWOI`: repacks quantized convolution weights from ONNX OIHW layout
+  to Gemmini's HWOI layout.
+- `copyNHWCtoNCHW`: converts Gemmini NHWC convolution output back to ONNX NCHW.
+- `buildAdjustedConvBias`: folds input zero-point correction into int32
+  per-output-channel bias.
+- `om_gemmini_qlinearconv_i8_impl`: shared QLinearConv implementation for bias
+  and no-bias wrappers.
+- `om_gemmini_conv_f32_impl`: shared f32 Conv implementation for bias and
+  no-bias wrappers.
+- `om_gemmini_convtranspose_f32_impl`: shared f32 ConvTranspose implementation
+  for bias and no-bias wrappers.
+- `om_gemmini_gemm_f32_impl`: shared f32 Gemm implementation for bias and
+  no-bias wrappers.
+
+Resize, pad, transpose, and split helpers:
+
+- `resize_input_coord`: maps an output coordinate to an input coordinate using
+  ONNX Resize coordinate transformation modes.
+- `resize_nearest_coord`: rounds a floating coordinate according to ONNX
+  nearest-neighbor modes.
+- `resize_clamp`: clamps integer coordinates into a valid range.
+- `pad_clamp_index`: implements edge padding index selection.
+- `pad_reflect_index`: implements reflect padding index selection.
+- `om_gemmini_transpose_f32_scalar_impl`: scalar rank-4 transpose fallback.
+- `om_gemmini_transpose_perm_has_hw_route`: recognizes permutations that could
+  use a future standalone Gemmini transposer route.
+- `om_gemmini_transposer_hw_available`: detects whether that standalone
+  transposer API is exposed by the ABI headers.
+- `om_gemmini_split_copy_slice_f32`: copies one split slice from a rank-4 input
+  tensor into an output tensor.
+
+Public runtime entry points:
+
+- `om_gemmini_matmulinteger_i8i8acc32`: MatMulInteger int8 x int8 to int32,
+  no zero-points.
+- `om_gemmini_matmulinteger_i8i8acc32_zp`: MatMulInteger with optional
+  zero-point correction.
+- `om_gemmini_qlinearconv_i8`: QLinearConv int8, no bias.
+- `om_gemmini_qlinearconv_i8_bias`: QLinearConv int8 with int32 bias.
+- `om_gemmini_matmul_f32_hw`: rank-2 f32 MatMul using Gemmini int8 hardware
+  plus f32 residual correction.
+- `om_gemmini_matmul_f32_nd_hw`: batched rank-N x rank-2 f32 MatMul.
+- `om_gemmini_matmul_f16_hw`: rank-2 f16 MatMul through the quantized Gemmini
+  path.
+- `om_gemmini_conv_f32` and `om_gemmini_conv_f32_bias`: f32 Conv wrappers.
+- `om_gemmini_convtranspose_f32` and `om_gemmini_convtranspose_f32_bias`: f32
+  ConvTranspose wrappers.
+- `om_gemmini_relu_f32`: element-wise ReLU.
+- `om_gemmini_batchnorm_f32`: inference-mode BatchNormalization.
+- `om_gemmini_add_f32`: flattened element-wise Add.
+- `om_gemmini_globalavgpool_f32`: NCHW GlobalAveragePool.
+- `om_gemmini_maxpool_f32`: NCHW MaxPool.
+- `om_gemmini_avgpool_f32`: NCHW AveragePool.
+- `om_gemmini_softmax_f32`: stable softmax over `batch x classes`.
+- `om_gemmini_gemm_f32` and `om_gemmini_gemm_f32_bias`: ONNX Gemm wrappers.
+- `om_gemmini_resize_nearest_f32` and `om_gemmini_resize_linear_f32`: NCHW
+  nearest and bilinear resize.
+- `om_gemmini_pad_constant_f32`, `om_gemmini_pad_reflect_f32`, and
+  `om_gemmini_pad_edge_f32`: NCHW Pad modes.
+- `om_gemmini_slice_f32`: rank-4 strided Slice.
+- `om_gemmini_concat_f32`: two-input rank-4 Concat.
+- `om_gemmini_transpose_f32_hw`: HW-preferred rank-4 Transpose with scalar
+  fallback.
+- `om_gemmini_split_2_f32`, `om_gemmini_split_3_f32`, and
+  `om_gemmini_split_4_f32`: rank-4 Split wrappers.
+- `om_gemmini_sigmoid_f32`: element-wise Sigmoid.
+- `om_gemmini_mul_f32`: flattened element-wise Multiply.
+
+#### Variable Name Reference
+
+The implementation uses short names that mirror tensor math notation:
+
+- `x`, `input`: input activation tensor.
+- `w`, `weights`: weight/filter tensor.
+- `b`, `bias`, `c`: optional bias or Gemm C tensor.
+- `out`, `output`, `y`: pre-allocated output tensor.
+- `a`, `lhs`, `A`: left operand of MatMul/Gemm.
+- `b`, `rhs`, `B`: right operand of MatMul/Gemm; when the function also has a
+  bias, the code uses names such as `biasData` to avoid ambiguity.
+- `N`: batch size in convolution/pooling code; row count in GEMM-style code
+  only when following `[M, K] x [K, N]`.
+- `C`, `inChannels`, `ic`: input channel count and loop index.
+- `OC`, `M`, `outChannels`, `oc`: output channel count and loop index.
+- `H`, `W`: input height and width.
+- `OH`, `OW`: output height and width.
+- `KH`, `KW`, `kernelDim`: kernel height, width, or square kernel size.
+- `M`, `K`, `N` in matmul helpers: matrix dimensions for
+  `[M, K] x [K, N] -> [M, N]`.
+- `stride`, `pad`, `padding`, `output_pad`: spatial operator attributes.
+- `shape`, `strides`: metadata returned by `OMTensor` accessors.
+- `src`, `dst`, `din`, `dout`: source and destination memory buffers.
+- `idx`, `in_idx`, `out_idx`: flattened row-major memory indices.
+- `n`, `c`, `h`, `w`: NCHW loop variables.
+- `oh`, `ow`, `ih`, `iw`: output/input spatial loop variables.
+- `kh`, `kw`: kernel spatial loop variables.
+- `scaleA`, `scaleB`, `invScaleA`, `invScaleB`, `outputScale`: dynamic
+  quantization scales for float-to-int8 Gemmini matmul.
+- `aQ`, `bQ`: temporary quantized int8 matrix buffers.
+- `acc`: int32 accumulator buffer produced by Gemmini.
+- `im2col`, `input_flat`, `weight_flat`: temporary packed matrices used to
+  express convolution as matrix multiplication.
+- `packedWeights`, `tempOutput`, `adjustedBias`: temporary quantized
+  convolution buffers for Gemmini layout and bias correction.
+- `rowSumsA`, `colSumsB`: sums used by MatMulInteger zero-point correction.
+- `perm`, `outCoord`, `inCoord`: Transpose permutation and coordinates.
+- `off0`, `off1`, `off2`, `off3`: split/concat offsets along the selected
+  axis.
 
 ## Bundled Gemmini Hardware ABI
 

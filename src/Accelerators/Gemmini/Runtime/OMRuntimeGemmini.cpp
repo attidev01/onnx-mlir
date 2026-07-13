@@ -80,11 +80,21 @@
 
 // ===--- Helpers ---===
 
+// Common local names used throughout this runtime:
+//   N/batchSize: batch dimension, C/inChannels: input channels,
+//   OC/M/outChannels: output channels, H/W: input height/width,
+//   OH/OW: output height/width, KH/KW/kernelDim: kernel height/width,
+//   M/N/K in matmul: [M,K] x [K,N] -> [M,N].
+//   x/a/lhs: input or left operand, w/b/rhs: weights or right operand,
+//   out/y/output: pre-allocated result tensor from ONNX-MLIR.
+
+/** Return true when runtime tracing is enabled through GEMMINI_TRACE. */
 static bool gemminiTraceEnabled() {
   const char *env = getenv("GEMMINI_TRACE");
   return !(env && env[0] == '0');
 }
 
+/** Convert ONNX-MLIR tensor dtype ids into compact trace labels. */
 static const char *traceTensorDTypeName(int64_t dtype) {
   switch (dtype) {
   case ONNX_TYPE_FLOAT:
@@ -100,6 +110,7 @@ static const char *traceTensorDTypeName(int64_t dtype) {
   }
 }
 
+/** Print one tensor's dtype, shape, and element count for trace logs. */
 static void traceTensorShape(const char *op, const char *label,
     const OMTensor *tensor) {
   if (!gemminiTraceEnabled() || !tensor)
@@ -115,6 +126,7 @@ static void traceTensorShape(const char *op, const char *label,
   fflush(stderr);
 }
 
+/** Print min/max/mean/nonzero/NaN/Inf statistics for supported tensor dtypes. */
 static void traceTensorStats(const char *label, const OMTensor *tensor) {
   if (!gemminiTraceEnabled() || !tensor)
     return;
@@ -200,6 +212,7 @@ static void traceTensorStats(const char *label, const OMTensor *tensor) {
   fflush(stderr);
 }
 
+/** Print both shape metadata and scalar statistics for a tensor. */
 static void traceTensorShapeStats(
     const char *op, const char *label, const OMTensor *tensor) {
   if (!gemminiTraceEnabled() || !tensor)
@@ -210,6 +223,7 @@ static void traceTensorShapeStats(
   traceTensorStats(statsLabel, tensor);
 }
 
+/** Print scalar statistics for a raw float buffer. */
 static void traceF32BufferStats(const char *label, const float *data, int64_t n) {
   if (!gemminiTraceEnabled() || !data || n <= 0)
     return;
@@ -244,6 +258,7 @@ static void traceF32BufferStats(const char *label, const float *data, int64_t n)
   fflush(stderr);
 }
 
+/** Print a compact f32 convolution shape line for tracing. */
 static void traceConvF32Shape(int64_t N, int64_t C, int64_t H, int64_t W,
     int64_t OC, int64_t KH, int64_t KW, int64_t OH, int64_t OW,
     int64_t stride, int64_t pad, bool hasBias) {
@@ -260,6 +275,7 @@ static void traceConvF32Shape(int64_t N, int64_t C, int64_t H, int64_t W,
   fflush(stderr);
 }
 
+/** True when an optional zero-point tensor is NULL, scalar, or rank-1 int8. */
 static bool isNoneScalarOrVectorI8Tensor(const OMTensor *tensor) {
   if (!tensor)
     return true;
@@ -269,6 +285,7 @@ static bool isNoneScalarOrVectorI8Tensor(const OMTensor *tensor) {
   return rank == 0 || rank == 1;
 }
 
+/** Read a scalar int8 zero-point tensor, using zero when it is omitted. */
 static int32_t loadOptionalScalarI8(const OMTensor *tensor) {
   if (!tensor)
     return 0;
@@ -276,12 +293,14 @@ static int32_t loadOptionalScalarI8(const OMTensor *tensor) {
   return (int32_t)(*(const int8_t *)omTensorGetDataPtr(tensor));
 }
 
+/** Read a scalar float32 tensor. */
 static float loadScalarF32(const OMTensor *tensor) {
   assert(tensor && omTensorGetDataType(tensor) == ONNX_TYPE_FLOAT &&
          omTensorGetNumElems(tensor) == 1 && "expected scalar f32 tensor");
   return *(const float *)omTensorGetDataPtr(tensor);
 }
 
+/** Return whether a zero-point tensor is scalar or vector-length. */
 static int64_t getZeroPointSpan(
     const OMTensor *tensor, int64_t expectedVectorLen) {
   if (!tensor)
@@ -292,6 +311,7 @@ static int64_t getZeroPointSpan(
   return numElems;
 }
 
+/** Read either the scalar zero-point or the indexed vector zero-point value. */
 static int32_t getZeroPointValue(
     const OMTensor *tensor, int64_t index, int64_t expectedVectorLen) {
   if (!tensor)
@@ -312,6 +332,7 @@ static float decodeF32Bits(int64_t bits) {
 
 // ===--- Integer / quantized path ---===
 
+/** Thin wrapper around Gemmini WS tiled matmul for int8 inputs/i32 output. */
 static void om_gemmini_tiled_matmul_i8i8acc32_ws(int64_t dimI, int64_t dimJ,
     int64_t dimK, const int8_t *A, const int8_t *B, const int32_t *D,
     int32_t *C, int64_t strideA, int64_t strideB, int64_t strideD,
@@ -328,6 +349,7 @@ static void om_gemmini_tiled_matmul_i8i8acc32_ws(int64_t dimI, int64_t dimJ,
   gemmini_fence();
 }
 
+/** Apply ONNX MatMulInteger zero-point correction after raw Gemmini matmul. */
 static void applyZeroPointCorrection(OMTensor *output, const OMTensor *lhs,
     const OMTensor *rhs, const OMTensor *aZeroPoint,
     const OMTensor *bZeroPoint) {
@@ -451,6 +473,7 @@ void om_gemmini_matmulinteger_i8i8acc32_zp(OMTensor *output,
   traceTensorShapeStats("matmulinteger_zp", "output", output);
 }
 
+/** Pack convolution weights from ONNX OIHW into Gemmini's HWOI layout. */
 static void packOIHWtoHWOI(const int8_t *weights, int64_t outChannels,
     int64_t inChannels, int64_t kernelDim, int8_t *packedWeights) {
   for (int64_t krow = 0; krow < kernelDim; ++krow)
@@ -466,6 +489,7 @@ static void packOIHWtoHWOI(const int8_t *weights, int64_t outChannels,
         }
 }
 
+/** Copy Gemmini NHWC convolution output back into ONNX NCHW layout. */
 static void copyNHWCtoNCHW(const int8_t *src, int8_t *dst, int64_t outChannels,
     int64_t outRowDim, int64_t outColDim) {
   for (int64_t och = 0; och < outChannels; ++och)
@@ -477,6 +501,7 @@ static void copyNHWCtoNCHW(const int8_t *src, int8_t *dst, int64_t outChannels,
       }
 }
 
+/** Build per-output-channel bias with input zero-point correction folded in. */
 static void buildAdjustedConvBias(const OMTensor *weights, const OMTensor *bias,
     int32_t xZeroPoint, int64_t outChannels, int64_t inChannels,
     int64_t kernelDim, int32_t *adjustedBias) {
@@ -498,6 +523,7 @@ static void buildAdjustedConvBias(const OMTensor *weights, const OMTensor *bias,
   }
 }
 
+/** Shared implementation for bias and no-bias QLinearConv entry points. */
 static void om_gemmini_qlinearconv_i8_impl(OMTensor *output,
     const OMTensor *input, const OMTensor *xScale, const OMTensor *xZeroPoint,
     const OMTensor *weights, const OMTensor *wScale, const OMTensor *wZeroPoint,
@@ -641,6 +667,7 @@ void om_gemmini_qlinearconv_i8_bias(OMTensor *output, const OMTensor *input,
 // semantics while the accelerator path is still executed.
 //
 
+/** Quantize an f32 value to signed int8 using symmetric scaling. */
 static int8_t quantizeSymmetricI8(float value, float invScale) {
   long q = lroundf(value * invScale);
   if (q > 127)
@@ -650,6 +677,7 @@ static int8_t quantizeSymmetricI8(float value, float invScale) {
   return (int8_t)q;
 }
 
+/** Compute an f32 dot product between strided vectors. */
 static float dotProductF32(const float *A, int64_t strideA, const float *B,
     int64_t strideB, int64_t K) {
   float sum = 0.0f;
@@ -658,10 +686,12 @@ static float dotProductF32(const float *A, int64_t strideA, const float *B,
   return sum;
 }
 
+/** Convert an i32 Gemmini accumulator back to f32 with a combined scale. */
 static float dequantizedAccF32(int32_t acc, float outputScale) {
   return (float)acc * outputScale;
 }
 
+/** Convert a flattened leading-dimension index into a physical tensor offset. */
 static int64_t flattenedLeadingOffset(int64_t linear, const int64_t *shape,
     const int64_t *strides, int64_t leadingRank) {
   int64_t offset = 0;
@@ -673,6 +703,7 @@ static int64_t flattenedLeadingOffset(int64_t linear, const int64_t *shape,
   return offset;
 }
 
+/** Quantize f32 matrices, execute Gemmini i8 matmul, and return i32 acc/scale. */
 static void om_gemmini_quantized_matmul_f32_ws(int64_t M, int64_t N, int64_t K,
     const float *A, int64_t strideA, const float *B, int64_t strideB,
     int32_t *acc, float *outputScale) {
@@ -884,6 +915,7 @@ void om_gemmini_matmul_f32_nd_hw(
   traceTensorShapeStats("matmul_nd", "output", out);
 }
 
+/** Return the maximum absolute f16 value after converting each element to f32. */
 static float maxAbsF16(const uint16_t *data, int64_t n) {
   float maxAbs = 0.0f;
   for (int64_t i = 0; i < n; ++i) {
@@ -973,7 +1005,7 @@ void om_gemmini_matmul_f16_hw(
   traceTensorShapeStats("matmul_f16", "output", out);
 }
 
-
+/** Shared f32 Conv implementation for bias and no-bias public wrappers. */
 static void om_gemmini_conv_f32_impl(OMTensor *out, const OMTensor *x,
     const OMTensor *w, const OMTensor *b, int64_t stride, int64_t pad) {
   assert(out && x && w);
@@ -1115,6 +1147,7 @@ void om_gemmini_conv_f32_bias(OMTensor *out, const OMTensor *x,
 // hardware path while preserving ONNX f32 semantics on the simulator.
 //
 
+/** Shared f32 ConvTranspose implementation for bias/no-bias public wrappers. */
 static void om_gemmini_convtranspose_f32_impl(OMTensor *out, const OMTensor *x,
     const OMTensor *w, const OMTensor *b, int64_t stride, int64_t pad,
     int64_t output_pad) {
@@ -1551,6 +1584,7 @@ void om_gemmini_softmax_f32(
   traceTensorShapeStats("softmax", "output", out);
 }
 
+/** Shared f32 GEMM implementation for bias and no-bias public wrappers. */
 static void om_gemmini_gemm_f32_impl(OMTensor *out, const OMTensor *a,
     const OMTensor *b, const OMTensor *c, int64_t transA, int64_t transB,
     int64_t alphaBits, int64_t betaBits) {
@@ -1670,6 +1704,7 @@ void om_gemmini_gemm_f32_bias(OMTensor *out, const OMTensor *a,
 
 // ===--- Resize helpers ---===
 
+/** Map an output coordinate to an input coordinate for ONNX Resize. */
 // coord_mode: 0=asymmetric, 1=half_pixel, 2=align_corners
 static float resize_input_coord(
     int64_t out_coord, int64_t out_size, int64_t in_size, int64_t coord_mode) {
@@ -1686,6 +1721,7 @@ static float resize_input_coord(
   }
 }
 
+/** Round a floating input coordinate according to ONNX nearest_mode. */
 // nearest_mode: 0=floor, 1=ceil, 2=round_prefer_floor, 3=round_prefer_ceil
 static int64_t resize_nearest_coord(float x, int64_t nearest_mode) {
   switch (nearest_mode) {
@@ -1706,14 +1742,17 @@ static int64_t resize_nearest_coord(float x, int64_t nearest_mode) {
   }
 }
 
+/** Clamp an integer coordinate into [lo, hi]. */
 static int64_t resize_clamp(int64_t v, int64_t lo, int64_t hi) {
   return v < lo ? lo : (v > hi ? hi : v);
 }
 
+/** Clamp an out-of-range pad coordinate to the nearest edge element. */
 static int64_t pad_clamp_index(int64_t v, int64_t len) {
   return resize_clamp(v, 0, len - 1);
 }
 
+/** Reflect an out-of-range pad coordinate without repeating edge elements. */
 static int64_t pad_reflect_index(int64_t v, int64_t len) {
   if (len <= 1)
     return 0;
@@ -2187,6 +2226,7 @@ static void om_gemmini_transpose_f32_scalar_impl(
   traceTensorShapeStats("transpose", "output", out);
 }
 
+/** Return true for rank-4 permutations that a future HW route can support. */
 static bool om_gemmini_transpose_perm_has_hw_route(const int64_t perm[4]) {
   // Identity, NCHW <-> NHWC, and H/W swap map to simple matrix-transposer
   // schedules when the standalone transposer interface is exposed by Gemmini.
@@ -2196,6 +2236,7 @@ static bool om_gemmini_transpose_perm_has_hw_route(const int64_t perm[4]) {
          (perm[0] == 0 && perm[1] == 1 && perm[2] == 3 && perm[3] == 2);
 }
 
+/** True when the bundled Gemmini ABI exposes a standalone transposer command. */
 static bool om_gemmini_transposer_hw_available(void) {
 #if defined(GEMMINI_HAS_STANDALONE_TRANSPOSER)
   return true;

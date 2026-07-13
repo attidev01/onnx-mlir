@@ -3,6 +3,17 @@
 #ifndef SRC_MAIN_C_GEMMINI_H
 #define SRC_MAIN_C_GEMMINI_H
 
+// Gemmini software ABI.
+//
+// This header translates C/C++ helper calls into RoCC custom instructions for
+// a specific Gemmini hardware configuration.  The low-level macros encode
+// command operands; the higher-level tiled_* helpers choose scratchpad tiles,
+// configure load/store/execute units, and provide CPU reference fallbacks.
+//
+// Matrix dimensions follow Gemmini convention:
+//   dim_I x dim_K times dim_K x dim_J gives dim_I x dim_J.
+// Scratchpad tile dimensions are expressed in multiples of DIM.
+
 #undef abs
 
 #include <stdint.h>
@@ -61,6 +72,8 @@
 #define k_LOOP_WS_CONFIG_SPAD_AB 24
 #define k_LOOP_WS_CONFIG_SPAD_C 25
 
+// Configuration command selectors for execute, load, store, and BERT-style
+// normalization units.
 #define CONFIG_EX 0
 #define CONFIG_LD 1
 #define CONFIG_ST 2
@@ -70,6 +83,7 @@
 #define OUTPUT_STATIONARY 0
 #define WEIGHT_STATIONARY 1
 
+// Activation selector values understood by Gemmini store/execute paths.
 #define NO_ACTIVATION 0
 #define RELU 1
 #define LAYERNORM 2
@@ -137,6 +151,7 @@ static bool acc_t_isnan(acc_t x) {
 #endif
 
 #ifdef HAS_MVIN_SCALE
+// Convert between a scale value and the bit pattern packed into RoCC commands.
 static scale_t scale_t_bits_to_scale_t(scale_t_bits x) {
     union {
         scale_t_bits b;
@@ -182,6 +197,7 @@ static scale_acc_t_bits scale_acc_t_to_scale_acc_t_bits(scale_acc_t x) {
 }
 #endif
 
+// Convert accumulator-output scale values to/from command bit patterns.
 static acc_scale_t acc_scale_t_bits_to_acc_scale_t(acc_scale_t_bits x) {
     union {
         acc_scale_t_bits b;
@@ -205,7 +221,9 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 #define ROCC_INSTRUCTION_RS1_RS2(x, rs1, rs2, funct) \
   ROCC_INSTRUCTION_0_R_R(x, rs1, rs2, funct)
 
-// mvin and mvout
+// ===--- Raw Gemmini movement/compute/config commands ---===
+
+// Move data from DRAM to scratchpad or accumulator memory.
 #define gemmini_extended_mvin(dram_addr, spad_addr, cols, rows) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, dram_addr, ((uint64_t)(rows) << (ADDR_LEN + 16)) | ((uint64_t)(cols) << ADDR_LEN) | (spad_addr), k_MVIN)
 
@@ -221,6 +239,7 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 #define gemmini_mvin(dram_addr, spad_addr) \
   gemmini_extended_mvin(dram_addr, spad_addr, DIM, DIM)
 
+// Move data from Gemmini scratchpad/accumulator memory back to DRAM.
 #define gemmini_extended_mvout(dram_addr, spad_addr, cols, rows) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, dram_addr, ((uint64_t)(rows) << (ADDR_LEN + 16)) | ((uint64_t)(cols) << ADDR_LEN) | (uint64_t)(spad_addr), k_MVOUT)
 
@@ -233,7 +252,7 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 #define gemmini_mvout(dram_addr, spad_addr) \
   gemmini_extended_mvout(dram_addr, spad_addr, DIM, DIM)
 
-// compute
+// Execute one systolic-array compute step using preloaded or accumulated data.
 #define gemmini_extended_compute_preloaded(A, BD, A_cols, A_rows, BD_cols, BD_rows) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)(A_rows) << (ADDR_LEN + 16)) | ((uint64_t)(A_cols) << ADDR_LEN) | (uint64_t)(A), ((uint64_t)(BD_rows) << (ADDR_LEN + 16)) | ((uint64_t)(BD_cols) << ADDR_LEN) | (uint64_t)(BD), k_COMPUTE_PRELOADED)
 
@@ -246,7 +265,7 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 #define gemmini_compute_accumulated(A, BD) \
   gemmini_extended_compute_accumulated(A, BD, DIM, DIM, DIM, DIM)
 
-// preload
+// Preload B/D and output C accumulator addresses for a following compute.
 #define gemmini_extended_preload(BD, C, BD_cols, BD_rows, C_cols, C_rows) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)(BD_rows) << (ADDR_LEN + 16)) | ((uint64_t)(BD_cols) << ADDR_LEN) | (uint64_t)(BD), ((uint64_t)(C_rows) << (ADDR_LEN + 16)) | ((uint64_t)(C_cols) << ADDR_LEN) | (uint64_t)(C), k_PRELOAD)
 
@@ -256,7 +275,7 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 #define gemmini_preload_zeros(C) \
   gemmini_preload(GARBAGE_ADDR, C)
 
-// config
+// Configure execute/load/store/normalization units.
 #define gemmini_extended3_config_ex(dataflow, sys_act, sys_shift, sys_acc_scale, C_stride, A_stride, A_transpose, B_transpose, set_only_strides) \
     ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)acc_scale_t_to_acc_scale_t_bits((acc_scale_t)sys_acc_scale) << 32) | ((uint64_t)(A_stride) << 16) | (B_transpose << 9) | (A_transpose << 8) | ((set_only_strides) << 7) | ((sys_act) << 3) | ((dataflow) << 2) | CONFIG_EX, ((uint64_t)(C_stride) << 48) | (sys_shift), k_CONFIG); \
 
@@ -305,17 +324,17 @@ static acc_scale_t_bits acc_scale_t_to_acc_scale_t_bits(acc_scale_t x) {
 #define gemmini_flush(skip) \
   ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, skip, 0, k_FLUSH)
 
-// fence
+// Ensure prior Gemmini memory operations are globally ordered.
 #define gemmini_fence() asm volatile("fence")
 
-// Counter access
+// Access Gemmini performance counter control/status registers.
 #define gemmini_counter_access(rd, config_reg) \
   { \
     uint32_t _placeholder; \
     ROCC_INSTRUCTION(XCUSTOM_ACC, rd, config_reg, _placeholder, k_COUNTER) \
   }
 
-// Read counter
+// Read one configured Gemmini counter.
 static uint32_t counter_read(size_t index) {
   uint32_t config_reg = (index & 0x7) << 4;
   uint32_t res;
@@ -323,7 +342,7 @@ static uint32_t counter_read(size_t index) {
   return res;
 }
 
-// Configure counter to take a new signal
+// Configure a Gemmini counter to observe a selected signal.
 static void counter_configure(size_t index, size_t counter_code) {
   int non_incremental = counter_code > INCREMENTAL_COUNTERS;
   if (non_incremental) {
@@ -335,21 +354,21 @@ static void counter_configure(size_t index, size_t counter_code) {
   gemmini_counter_access(placeholder, config_reg);
 }
 
-// Take a snapshot
+// Latch current counter values into the snapshot registers.
 static void counter_snapshot_take() {
   uint32_t config_reg = 0x4;
   uint32_t placeholder;
   gemmini_counter_access(placeholder, config_reg);
 }
 
-// Counter snapshot reset
+// Reset the snapshot registers.
 static void counter_snapshot_reset() {
   uint32_t config_reg = 0x2;
   uint32_t placeholder;
   gemmini_counter_access(placeholder, config_reg);
 }
 
-// Counter module reset
+// Reset the counter module.
 static void counter_reset() {
   uint32_t config_reg = 0x1;
   uint32_t placeholder;
@@ -362,7 +381,7 @@ static int ceil_divide_int(int a, int b){
     return c;
 }
 
-// weight-stationary matmul loop
+// Program Gemmini's hardware-loop controller for a weight-stationary matmul.
 #define gemmini_loop_ws(I, J, K, pad_I, pad_J, pad_K, A, B, D, C, A_stride, B_stride, D_stride, C_stride, A_transpose, B_transpose, full_C, low_D, ex_accumulate, act, a_spad_id, b_spad_id, is_resadd) \
   { \
     ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)(pad_K) << 32) | ((uint64_t)(pad_J) << 16) | (uint64_t)(pad_I), ((uint64_t)(K) << 32) | ((uint64_t)(J) << 16) | (uint64_t)(I), k_LOOP_WS_CONFIG_BOUNDS) \
@@ -380,7 +399,7 @@ static int ceil_divide_int(int a, int b){
     ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)(a_spad_id) << 18) | ((uint64_t)(b_spad_id) << 16) | ((uint64_t)(act) << 8) | ((low_D) << 2) | ((full_C) << 1) | (ex_accumulate), ((uint64_t)(C) << 32) | 0x200U | (skips) | ((is_resadd) << 2) | ((B_transpose) << 1) | (A_transpose), k_LOOP_WS) \
   }
 
-// weight-stationary conv loop
+// Program Gemmini's hardware-loop controller for weight-stationary convolution.
 #define gemmini_loop_conv_ws(batch_size, in_row_dim, in_col_dim, in_channels, out_channels, out_row_dim, out_col_dim, pool_out_row_dim, pool_out_col_dim, stride, padding, kernel_dim, kernel_dilation, pool_size, pool_stride, pool_padding, batches, porows, pocols, pochs, krows, kcols, kchs, lpad, rpad, upad, dpad, plpad, prpad, pupad, pdpad, orows, ocols, weights, output, bias, input, no_bias, no_pool, downsample, wrot180, input_dilated, activation, trans_output_1203, trans_weight_1203, trans_weight_0132, trans_input_3120, max_pixels_per_row, in_stride, weight_stride, out_stride, dw, a_spad_id, b_spad_id) \
   { \
     ROCC_INSTRUCTION_RS1_RS2(XCUSTOM_ACC, ((uint64_t)(out_channels) << 48) | ((uint64_t)(in_channels) << 32) | ((uint64_t)(in_row_dim) << 16) | (uint64_t)(batch_size), \
@@ -400,7 +419,9 @@ static int ceil_divide_int(int a, int b){
       k_LOOP_CONV_WS) \
   }
 
-// Tiling functions
+// ===--- Matrix multiplication helpers ---===
+
+// Software-managed output-stationary tiled matmul sequence.
 static void sp_tiled_matmul_os(const elem_t * A, const elem_t * B, const void * D, void * C,
         scale_t A_scale_factor, scale_t B_scale_factor, scale_acc_t D_scale_factor,
         size_t I, size_t J, size_t K, size_t pad_I, size_t pad_J, size_t pad_K,
@@ -523,6 +544,9 @@ static void sp_tiled_matmul_os(const elem_t * A, const elem_t * B, const void * 
 }
 
 
+// Weight-stationary tiled matmul sequence.  The active implementation delegates
+// to the Gemmini hardware-loop command; the commented block above is an older
+// explicit mvin/preload/compute/mvout schedule retained from upstream.
 static void sp_tiled_matmul_ws(const elem_t * A, const elem_t * B,
         const void * D, void * C,
         scale_t A_scale_factor, scale_t B_scale_factor, scale_acc_t D_scale_factor,
@@ -713,6 +737,7 @@ static void sp_tiled_matmul_ws(const elem_t * A, const elem_t * B,
 }
 
 
+// Split a full matmul into Gemmini tiles and dispatch each tile to OS or WS.
 static void tiled_matmul_outer(size_t dim_I, size_t dim_J, size_t dim_K,
         const elem_t* A, const elem_t* B,
         const void * D, void * C,
@@ -858,6 +883,7 @@ static void tiled_matmul_outer(size_t dim_I, size_t dim_J, size_t dim_K,
 }
 
 
+// Integer square-root helper used by CPU layernorm reference code.
 static acc_t int_sqrt(acc_t n) {
   if (n == 0) return 0;
 
@@ -875,6 +901,7 @@ static acc_t int_sqrt(acc_t n) {
 }
 
 
+// Apply optional activation, output scaling, and elem_t saturation.
 static elem_t scale_and_sat(acc_t x, int act, acc_scale_t scale, acc_scale_t bert_scale) {
   // Apply I-GELU if needed
   if (act == IGELU) {
@@ -920,6 +947,7 @@ static elem_t scale_and_sat(acc_t x, int act, acc_scale_t scale, acc_scale_t ber
 #define GEMMINI_ACC_SCALE(x, scale) (x)
 #endif
 
+// CPU reference matmul path used for tests and CPU-mode execution.
 static void matmul_cpu(bool transA, bool transB, size_t DIM_I, size_t DIM_J, size_t DIM_K,
         const elem_t* A, const elem_t* B, const acc_t * D,
         elem_t* C,
@@ -1122,11 +1150,10 @@ static void matmul_cpu(bool transA, bool transB, size_t DIM_I, size_t DIM_J, siz
 
 #undef GEMMINI_SCALE
 
-// General matmul which can be run with different dataflows, or on the CPU
+// General matmul backend selector: output-stationary, weight-stationary, CPU.
 enum tiled_matmul_type_t {OS, WS, CPU}; // TODO rename this so it's name also applies to convs
 
-// This function runs a tiled matrix mulctiplication, with hardcoded tiling
-// factors
+// Run tiled matrix multiplication with caller-specified tile sizes.
 static void tiled_matmul(size_t dim_I, size_t dim_J, size_t dim_K,
         const elem_t* A, const elem_t* B,
         const void * D, void* C,
@@ -1243,17 +1270,18 @@ static void tiled_matmul(size_t dim_I, size_t dim_J, size_t dim_K,
 }
 
 
+// Estimate scratchpad rows needed for one matmul tile.
 static size_t tiled_matmul_total_spad_rows(size_t I, size_t J, size_t K) {
   return (I * K + K * J) * DIM;
 }
 
 
+// Estimate accumulator rows needed for one matmul output tile.
 static size_t tiled_matmul_total_acc_rows(size_t I, size_t J) {
   return (I * J) * DIM;
 }
 
-// This function runs a tiled matrix multiplication, with automatically
-// calculated tiling factors
+// Run tiled matrix multiplication after selecting tile sizes automatically.
 _STATIC void tiled_matmul_auto(size_t dim_I, size_t dim_J, size_t dim_K,
         const elem_t* A, const elem_t* B,
         const void * D, void * C,
@@ -1371,6 +1399,9 @@ _STATIC void tiled_matmul_auto(size_t dim_I, size_t dim_J, size_t dim_K,
 }
 
 
+// ===--- Convolution helpers ---===
+
+// Issue one hardware-loop convolution tile to Gemmini.
 static void sp_tiled_conv(
         int batch_size, int in_row_dim, int in_col_dim, int in_channels,
         int out_channels, int out_row_dim, int out_col_dim,
@@ -1783,6 +1814,7 @@ static void sp_tiled_conv(
 }
 
 
+// Estimate scratchpad or accumulator rows for a depthwise convolution tile.
 static int tiled_conv_total_spad_rows_dw(bool acc, bool weight,
         int stride,
         int batches,
@@ -1813,6 +1845,7 @@ static int tiled_conv_total_spad_rows_dw(bool acc, bool weight,
 }
 
 
+// Estimate scratchpad or accumulator rows for a standard convolution tile.
 static int tiled_conv_total_spad_rows(bool acc,
         int stride,
         int input_dilation,
@@ -1856,6 +1889,7 @@ static int tiled_conv_total_spad_rows(bool acc,
 }
 
 
+// CPU reference convolution without pooling.
 static void conv_cpu_without_pool(
         int batch_size, int in_row_dim, int in_col_dim, int in_channels,
         int out_channels, int out_row_dim, int out_col_dim,
@@ -1933,6 +1967,7 @@ static void conv_cpu_without_pool(
 }
 
 
+// CPU reference depthwise convolution without pooling.
 static void conv_dw_cpu_without_pool(
         int batch_size, int in_row_dim, int in_col_dim,
         int channels, int out_row_dim, int out_col_dim,
@@ -1980,6 +2015,7 @@ static void conv_dw_cpu_without_pool(
 }
 
 
+// CPU reference convolution with optional max-pooling.
 static void conv_cpu(
         int batch_size, int in_row_dim, int in_col_dim, int in_channels,
         int out_channels, int out_row_dim, int out_col_dim,
@@ -2101,6 +2137,7 @@ static void conv_cpu(
 }
 
 
+// CPU reference depthwise convolution with optional max-pooling.
 static void conv_dw_cpu(
         int batch_size, int in_row_dim, int in_col_dim,
         int channels, int out_row_dim, int out_col_dim,
@@ -2190,6 +2227,7 @@ static void conv_dw_cpu(
 }
 
 
+// Run tiled standard convolution with caller-specified tile sizes.
 static void tiled_conv(
         int batch_size,
         int in_row_dim, int in_col_dim, int in_channels,
@@ -2477,6 +2515,7 @@ static void tiled_conv(
 }
 
 
+// Run tiled depthwise convolution with caller-specified tile sizes.
 static void tiled_conv_dw(
     int batch_size, int in_row_dim, int in_col_dim,
     int channels, int out_row_dim, int out_col_dim,
@@ -2658,8 +2697,8 @@ static void tiled_conv_dw(
     }
 }
 
-// need to specify each operand/output's stride
-// stride only for trans == false, wrot == false
+// Run convolution with caller-specified input/weight/output strides and
+// automatically selected tile sizes.
 static void tiled_conv_stride_auto(
         int batch_size, int in_row_dim, int in_col_dim, int in_channels,
         int out_channels, int out_row_dim, int out_col_dim,
@@ -2856,6 +2895,7 @@ static void tiled_conv_stride_auto(
 }
 
 
+// Run convolution with default NHWC-style strides and automatic tile sizes.
 _STATIC void tiled_conv_auto(
         int batch_size, int in_row_dim, int in_col_dim, int in_channels,
         int out_channels, int out_row_dim, int out_col_dim,
@@ -2891,7 +2931,7 @@ _STATIC void tiled_conv_auto(
 
 }
 
-// This function is for a convolution with kernel_dim=1, stride==2, padding=0, and no pooling
+// Specialized 1x1 stride-2 convolution path with no padding or pooling.
 static void tiled_conv_downsample(
         int batch_size, int in_row_dim, int in_col_dim, int in_channels,
         int out_channels, int out_row_dim, int out_col_dim,
@@ -2944,7 +2984,7 @@ static void tiled_conv_downsample(
     }
 }
 
-//for mobilenet's depthwise convs
+// Depthwise convolution auto-tiler, used by MobileNet-style layers.
 _STATIC void tiled_conv_dw_auto(
     int batch_size, int in_row_dim, int in_col_dim,
     int channels, int out_row_dim, int out_col_dim,
@@ -3128,6 +3168,9 @@ _STATIC void tiled_conv_dw_auto(
 }
 
 
+// ===--- Residual add helpers ---===
+
+// CPU reference for scaled residual add: C = scale(A) + scale(B).
 static void resadd_cpu(const size_t I, const size_t J,
         const size_t stride,
         const scale_t A_scale,
@@ -3157,6 +3200,7 @@ static void resadd_cpu(const size_t I, const size_t J,
 }
 
 
+// Issue one residual-add tile to Gemmini through the WS loop path.
 static void sp_tiled_resadd(const size_t I, const size_t J,
         const scale_t A_scale,
         const scale_t B_scale,
@@ -3223,7 +3267,7 @@ static void sp_tiled_resadd(const size_t I, const size_t J,
     */
 }
 
-// Compute MVIN_SCALE(A, A_scale) + MVIN_SCALE(B, B_scale) = C
+// Compute MVIN_SCALE(A, A_scale) + MVIN_SCALE(B, B_scale) = C.
 static void tiled_resadd(const size_t I, const size_t J,
         const size_t stride,
         const size_t tile_I, const size_t tile_J,
@@ -3261,8 +3305,7 @@ static void tiled_resadd(const size_t I, const size_t J,
     gemmini_fence();
 }
 
-// Compute (A >> A_shift) + B = C
-// specify stride
+// Auto-tile residual add with a caller-specified row stride.
 static void tiled_resadd_stride_auto(const size_t I, const size_t J,
         const scale_t A_scale,
         const scale_t B_scale,
@@ -3313,6 +3356,7 @@ static void tiled_resadd_stride_auto(const size_t I, const size_t J,
     }
 }
 
+// Auto-tile residual add with contiguous row-major layout.
 _STATIC void tiled_resadd_auto(const size_t I, const size_t J,
         const scale_t A_scale,
         const scale_t B_scale,
@@ -3329,6 +3373,9 @@ _STATIC void tiled_resadd_auto(const size_t I, const size_t J,
         relu, matadd_type);
 }
 
+// ===--- Global average pooling helpers ---===
+
+// CPU reference global average over a square spatial dimension.
 static void global_average_cpu(const elem_t * input, elem_t * output,
     int batches, int channels, int dim) {
   const int count = dim * dim;
@@ -3354,6 +3401,7 @@ static void global_average_cpu(const elem_t * input, elem_t * output,
 }
 
 
+// Issue one channel tile of global-average accumulation through Gemmini.
 static void sp_tiled_global_average(const elem_t * input, elem_t * output,
     int batches, int channels, int dim, int channel_tile_size) {
   const uint32_t C_acc_addr_start = ((uint32_t)1 << 31);
@@ -3398,6 +3446,7 @@ static void sp_tiled_global_average(const elem_t * input, elem_t * output,
 }
 
 
+// Run Gemmini global average pooling over channel tiles.
 static void tiled_global_average(const elem_t * input, elem_t * output,
     int batches, int channels, int dim,
     int channel_tile_size) {
@@ -3419,6 +3468,7 @@ static void tiled_global_average(const elem_t * input, elem_t * output,
 }
 
 
+// Select channel tile size automatically for global average pooling.
 static void tiled_global_average_auto(const elem_t * input, elem_t * output,
     int batches, int channels, int dim,
     enum tiled_matmul_type_t type) {
@@ -3438,6 +3488,9 @@ static void tiled_global_average_auto(const elem_t * input, elem_t * output,
       channel_tile_size);
 }
 
+// ===--- Normalization helpers ---===
+
+// Issue one layernorm/softmax tile to Gemmini normalization hardware.
 static void sp_tiled_norm(const size_t I, const size_t J,
         const acc_t * in, elem_t * out,
         size_t A_row_stride, size_t C_row_stride,
@@ -3530,6 +3583,7 @@ static void sp_tiled_norm(const size_t I, const size_t J,
 #endif
 }
 
+// Run tiled normalization with caller-selected tile sizes.
 static void tiled_norm(const size_t I, const size_t J,
         const size_t tile_I, const size_t tile_J,
         const acc_t * in,
@@ -3578,6 +3632,7 @@ static void tiled_norm(const size_t I, const size_t J,
     gemmini_fence();
 }
 
+// Select normalization tile sizes automatically.
 _STATIC void tiled_norm_auto(const size_t I, const size_t J,
         const acc_t * in,
         elem_t * out,

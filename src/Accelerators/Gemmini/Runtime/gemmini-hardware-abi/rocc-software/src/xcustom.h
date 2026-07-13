@@ -15,6 +15,8 @@
 #ifndef ROCC_SOFTWARE_SRC_XCUSTOM_H_
 #define ROCC_SOFTWARE_SRC_XCUSTOM_H_
 
+// Stringification and token-concatenation helpers used to build `.insn`
+// assembly operands such as CUSTOM_0, CUSTOM_1, CUSTOM_2, and CUSTOM_3.
 #define STR1(x) #x
 #ifndef STR
 #define STR(x) STR1(x)
@@ -22,6 +24,9 @@
 
 #define CAT_(A, B) A##B
 #define CAT(A, B) CAT_(A, B)
+
+// The RAW_* macros are for assembly source.  The non-RAW macros below are for
+// C/C++ inline assembly and bind C variables to RISC-V registers.
 
 /** Assembly macro for creating "raw" Rocket Custom Coproessor (RoCC)
   * assembly language instructions that will return data in rd. These
