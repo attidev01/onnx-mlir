@@ -91,7 +91,7 @@
 /** Return true when runtime tracing is enabled through GEMMINI_TRACE. */
 static bool gemminiTraceEnabled() {
   const char *env = getenv("GEMMINI_TRACE");
-  return !(env && env[0] == '0');
+  return env && env[0] != '\0' && env[0] != '0';
 }
 
 /** Convert ONNX-MLIR tensor dtype ids into compact trace labels. */
