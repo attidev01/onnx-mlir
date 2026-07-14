@@ -236,8 +236,8 @@ that compiled models still need at runtime.
 
 Trace helpers:
 
-- `gemminiTraceEnabled`: checks `GEMMINI_TRACE`; tracing is enabled unless the
-  variable is set to `0`.
+- `gemminiTraceEnabled`: checks `GEMMINI_TRACE`; tracing is disabled by default
+  and enabled only when the variable is set to a non-empty value other than `0`.
 - `traceTensorDTypeName`: converts ONNX-MLIR dtype ids to short names such as
   `f32`, `f16`, `i8`, and `i32`.
 - `traceTensorShape`: prints a tensor's dtype, shape, and element count.

@@ -23,26 +23,40 @@ namespace onnx_mlir {
 namespace gemmini {
 
 struct GemminiTargetInfo {
+  // Matrix array dimension from Gemmini's DIM parameter.
   static constexpr int64_t dim = @GEMMINI_TARGET_DIM@;
+  // Number of scratchpad memory banks configured in hardware.
   static constexpr int64_t bankNum = @GEMMINI_TARGET_BANK_NUM@;
+  // Number of rows available in each scratchpad bank.
   static constexpr int64_t bankRows = @GEMMINI_TARGET_BANK_ROWS@;
+  // Number of accumulator rows available to Gemmini operations.
   static constexpr int64_t accRows = @GEMMINI_TARGET_ACC_ROWS@;
+  // Bit width of one input/activation element.
   static constexpr int64_t elemBits = @GEMMINI_TARGET_ELEM_BITS@;
+  // Bit width of one accumulator element.
   static constexpr int64_t accBits = @GEMMINI_TARGET_ACC_BITS@;
 
+  // Total addressable scratchpad rows across all banks.
   static constexpr int64_t scratchpadRows() { return bankNum * bankRows; }
+  // Number of DIM x DIM matrices that fit in the scratchpad.
   static constexpr int64_t scratchpadMatrices() {
     return scratchpadRows() / dim;
   }
+  // Number of DIM x DIM matrices that fit in the accumulator.
   static constexpr int64_t accumulatorMatrices() { return accRows / dim; }
 
+  // Integer ceil(value / divisor), used to count partial edge tiles.
   static constexpr int64_t ceilDiv(int64_t value, int64_t divisor) {
     return (value + divisor - 1) / divisor;
   }
 
+  // Tile counts for an MxK by KxN matmul under the configured DIM.
   struct MatmulTileCounts {
+    // Number of tiles along the output M dimension.
     int64_t mTiles;
+    // Number of tiles along the output N dimension.
     int64_t nTiles;
+    // Number of tiles along the reduction K dimension.
     int64_t kTiles;
   };
 

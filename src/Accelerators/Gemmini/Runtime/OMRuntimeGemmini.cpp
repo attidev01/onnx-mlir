@@ -88,7 +88,7 @@
 //   x/a/lhs: input or left operand, w/b/rhs: weights or right operand,
 //   out/y/output: pre-allocated result tensor from ONNX-MLIR.
 
-/** Return true when runtime tracing is enabled through GEMMINI_TRACE. */
+/** Return true when runtime tracing is explicitly enabled through GEMMINI_TRACE. */
 static bool gemminiTraceEnabled() {
   const char *env = getenv("GEMMINI_TRACE");
   return env && env[0] != '\0' && env[0] != '0';
