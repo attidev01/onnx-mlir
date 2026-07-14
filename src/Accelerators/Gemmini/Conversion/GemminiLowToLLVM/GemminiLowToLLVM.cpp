@@ -3,6 +3,12 @@
  */
 
 //===------- GemminiLowToLLVM.cpp - Lowering from Gemmini to LLVM --------===//
+//
+// Converts low-level Gemmini dialect operations into LLVM dialect operations.
+// The generated LLVM uses inline assembly to emit RoCC custom instructions, so
+// this is the final compiler-side step before normal LLVM code generation.
+//
+//===----------------------------------------------------------------------===//
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -29,6 +35,8 @@ static constexpr uint64_t kComputeAccumulatedFunct = 5;
 
 static void emitInlineAsmVoid(ConversionPatternRewriter &rewriter,
     Location loc, ArrayRef<Value> operands, StringRef asmString) {
+  // GemminiLow operations lower to side-effecting inline assembly with no SSA
+  // results. The two `r` constraints match the RoCC rs1/rs2 register operands.
   LLVM::InlineAsmOp::create(rewriter, loc,
       LLVM::LLVMVoidType::get(rewriter.getContext()), operands, asmString,
       "r,r", /*has_side_effects=*/true, /*is_align_stack=*/false,
@@ -37,6 +45,8 @@ static void emitInlineAsmVoid(ConversionPatternRewriter &rewriter,
 
 static Value getI8PtrFromMemRef(
     ConversionPatternRewriter &rewriter, Location loc, Value llvmMemRef) {
+  // RoCC commands consume raw addresses, so unwrap the LLVM memref descriptor
+  // and cast the aligned data pointer to i8*.
   MemRefDescriptor descriptor(llvmMemRef);
   Value alignedPtr = descriptor.alignedPtr(rewriter, loc);
   return LLVM::BitcastOp::create(
@@ -45,12 +55,14 @@ static Value getI8PtrFromMemRef(
 
 static Value i64Const(ConversionPatternRewriter &rewriter, Location loc,
     uint64_t value) {
+  // Gemmini instruction metadata is packed into 64-bit rs1/rs2 operands.
   return LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64Type(),
       rewriter.getI64IntegerAttr(value));
 }
 
 static uint64_t getI64Attr(
     Operation *op, StringRef name, uint64_t defaultValue) {
+  // Optional scheduling attributes fall back to conservative hardware defaults.
   if (auto attr = op->template getAttrOfType<IntegerAttr>(name))
     return attr.getInt();
   return defaultValue;
@@ -69,13 +81,13 @@ public:
     Location loc = op.getLoc();
     uint64_t dataflow = op.getDataflow() == "ws" ? 1 : 0;
     // CONFIG_EX rs1/rs2 layout (rs1[1:0] = 0b00):
-    //   rs1[63:32] sys_acc_shift — IEEE 754 float; 1.0f = 0x3F800000
-    //   rs1[31:16] a_stride     — A row stride in scratchpad (1 = contiguous rows)
+    //   rs1[63:32] sys_acc_shift - IEEE 754 float; 1.0f = 0x3F800000
+    //   rs1[31:16] a_stride     - A row stride in scratchpad (1 = contiguous rows)
     //   rs1[9]     b_transpose
     //   rs1[8]     a_transpose
-    //   rs1[2]     dataflow     — 1=WS, 0=OS
-    //   rs2[63:48] c_stride     — C row stride in accumulator (1 = contiguous rows)
-    //   rs2[31:0]  sys_shift    — right-shift from acc_t to elem_t (0 = none)
+    //   rs1[2]     dataflow     - 1=WS, 0=OS
+    //   rs2[63:48] c_stride     - C row stride in accumulator (1 = contiguous rows)
+    //   rs2[31:0]  sys_shift    - right-shift from acc_t to elem_t (0 = none)
     constexpr uint64_t kSysAccShift = 0x3F800000ULL; // 1.0f identity
     uint64_t aT = op.getATranspose().value_or(false) ? 1ULL : 0ULL;
     uint64_t bT = op.getBTranspose().value_or(false) ? 1ULL : 0ULL;
@@ -152,7 +164,7 @@ public:
         rewriter, loc, {cfgRs1, cfgRs2}, ".insn r CUSTOM_3, 0x3, 0, x0, $0, $1");
     Value rs1 = getI8PtrFromMemRef(rewriter, loc, adaptor.getDest());
     // Bit 31: accumulator (not scratchpad) source.
-    // Bit 29: full-width read — writes acc_t (int32) directly; without it the
+    // Bit 29: full-width read - writes acc_t (int32) directly; without it the
     //         hardware applies acc_scale and clips to elem_t (int8).
     uint64_t accAddr = 0x80000000ULL |
                        (fullRead ? 0x20000000ULL : 0ULL) |
@@ -178,6 +190,7 @@ public:
       OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     (void)adaptor;
+    // Keep the fence side-effecting so LLVM cannot move it across RoCC ops.
     LLVM::InlineAsmOp::create(rewriter, op.getLoc(),
         LLVM::LLVMVoidType::get(rewriter.getContext()), ValueRange(), "fence",
         "", /*has_side_effects=*/true, /*is_align_stack=*/false,
@@ -198,6 +211,8 @@ public:
       ConversionPatternRewriter &rewriter) const override {
     (void)adaptor;
     Location loc = op.getLoc();
+    // Static scratchpad allocation records concrete row offsets as attributes;
+    // this lowering packs them into PRELOAD/COMPUTE command operands.
     uint64_t lhsOffset = getI64Attr(op, "lhs_spad_offset_rows", 0);
     uint64_t rhsOffset = getI64Attr(
         op, "rhs_spad_offset_rows", gemmini::GemminiTargetInfo::dim);
@@ -219,7 +234,7 @@ public:
           rewriter, loc, {pRs1, pRs2}, ".insn r CUSTOM_3, 0x3, 6, x0, $0, $1");
     }
     Value rs1 = i64Const(rewriter, loc, lhsPacked);
-    // rs2=0xFFFFFFFF: sentinel for "no D bias" — Gemmini initialises results to 0
+    // rs2=0xFFFFFFFF: sentinel for "no D bias"; Gemmini initialises results to 0.
     Value rs2 = i64Const(rewriter, loc, 0xFFFFFFFFULL);
     emitInlineAsmVoid(rewriter, loc, {rs1, rs2},
         funct == kComputePreloadedFunct
@@ -243,6 +258,8 @@ struct GemminiLowToLLVMPass
 
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
+    // Treat GemminiLow as illegal after this pass so any missed operation is a
+    // hard lowering error instead of leaking into generic LLVM conversion.
     RewritePatternSet patterns(ctx);
     LowerToLLVMOptions options(ctx);
     LLVMTypeConverter typeConverter(ctx, options);

@@ -34,11 +34,16 @@ void configurePassesGemmini() {
 }
 
 void addONNXToGemminiPasses(PassManager &pm) {
+  // First select accelerator-compatible ONNX patterns, then canonicalize so
+  // later Gemmini passes see simpler IR and fewer dead helper operations.
   pm.addNestedPass<func::FuncOp>(createONNXToGemminiPass());
   pm.addPass(createCanonicalizerPass());
 }
 
 void addGemminiToGemminiLowPasses(PassManager &pm) {
+  // The high-level Gemmini dialect is still schedule-oriented. These passes
+  // make tile boundaries, scratchpad rows, and low-level instruction cleanup
+  // explicit before the LLVM inline-assembly lowering stage.
   pm.addNestedPass<func::FuncOp>(createGemminiTilingPass());
   pm.addNestedPass<func::FuncOp>(createGemminiToGemminiLowPass());
   pm.addNestedPass<func::FuncOp>(createStaticScratchpadAllocationPass());

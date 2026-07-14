@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// TableGen definitions for the low-level Gemmini dialect. These ops model the
+// explicit hardware-facing instruction sequence after tiling and before LLVM
+// inline-assembly emission.
+
 #ifndef GEMMINI_LOW_OPS
 #define GEMMINI_LOW_OPS
 

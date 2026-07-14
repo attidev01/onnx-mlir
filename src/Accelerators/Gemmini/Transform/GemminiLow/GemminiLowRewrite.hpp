@@ -16,6 +16,7 @@
 
 namespace onnx_mlir {
 
+// Create the pass that removes redundant adjacent GemminiLow commands.
 std::unique_ptr<mlir::Pass> createGemminiLowRewritePass();
 
 } // namespace onnx_mlir

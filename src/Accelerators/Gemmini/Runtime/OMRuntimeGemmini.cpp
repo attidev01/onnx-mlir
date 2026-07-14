@@ -88,7 +88,12 @@
 //   x/a/lhs: input or left operand, w/b/rhs: weights or right operand,
 //   out/y/output: pre-allocated result tensor from ONNX-MLIR.
 
-/** Return true when runtime tracing is explicitly enabled through GEMMINI_TRACE. */
+/** Return true when runtime tracing is explicitly enabled through GEMMINI_TRACE.
+ *
+ * The default is quiet so normal Spike and runtime benchmarks do not pay for
+ * per-tensor logging. Set GEMMINI_TRACE to any non-empty value except "0" when
+ * debugging tensor shapes, values, or Gemmini runtime dispatch.
+ */
 static bool gemminiTraceEnabled() {
   const char *env = getenv("GEMMINI_TRACE");
   return env && env[0] != '\0' && env[0] != '0';
@@ -1160,8 +1165,8 @@ static void om_gemmini_convtranspose_f32_impl(OMTensor *out, const OMTensor *x,
   const float *wData = (const float *)omTensorGetDataPtr(w);
   float *outData = (float *)omTensorGetDataPtr(out);
 
-  // x: [N, C, H, W]   — ONNX NCHW input
-  // w: [C, M, kH, kW] — ONNX ConvTranspose weights (in-channels first)
+  // x: [N, C, H, W]   - ONNX NCHW input
+  // w: [C, M, kH, kW] - ONNX ConvTranspose weights (in-channels first)
   // y: [N, M, H_out, W_out]  where H_out = (H-1)*stride + kH - 2*pad +
   // output_pad
   const int64_t N = xShape[0];
@@ -1212,7 +1217,7 @@ static void om_gemmini_convtranspose_f32_impl(OMTensor *out, const OMTensor *x,
 
   // input_flat [H*W, C]: input_flat[(ih*W+iw)*C + ic] = x[n, ic, ih, iw]
   float *input_flat = (float *)malloc((size_t)(IHW * C) * sizeof(float));
-  // acc [H*W, M*kH*kW] — int32 Gemmini accumulator
+  // acc [H*W, M*kH*kW] - int32 Gemmini accumulator
   int32_t *acc = (int32_t *)malloc((size_t)(IHW * MKHW) * sizeof(int32_t));
   assert(
       input_flat && acc && "failed to allocate ConvTranspose staging buffers");
@@ -2289,7 +2294,7 @@ void om_gemmini_transpose_f32_hw(OMTensor *out, const OMTensor *x,
  *
  * @param out    Pre-allocated output OMTensor.  Its shape encodes slice size.
  * @param x      Input tensor (NCHW f32).
- * @param axis   Axis along which the split is performed (0–3).
+ * @param axis   Axis along which the split is performed (0-3).
  * @param start  First index in *x* along *axis* belonging to this output.
  */
 static void om_gemmini_split_copy_slice_f32(OMTensor *out, const OMTensor *x,
@@ -2323,7 +2328,7 @@ static void om_gemmini_split_copy_slice_f32(OMTensor *out, const OMTensor *x,
  * @param out0  Pre-allocated first output; its axis dim gives split0_size.
  * @param out1  Pre-allocated second output.
  * @param x     Input tensor (NCHW f32).
- * @param axis  Split axis (0–3).
+ * @param axis  Split axis (0-3).
  */
 void om_gemmini_split_2_f32(OMTensor *out0, OMTensor *out1,
     const OMTensor *x, int64_t axis) {
@@ -2349,7 +2354,7 @@ void om_gemmini_split_2_f32(OMTensor *out0, OMTensor *out1,
  * @param out1  Pre-allocated second output.
  * @param out2  Pre-allocated third output.
  * @param x     Input tensor (NCHW f32).
- * @param axis  Split axis (0–3).
+ * @param axis  Split axis (0-3).
  */
 void om_gemmini_split_3_f32(OMTensor *out0, OMTensor *out1, OMTensor *out2,
     const OMTensor *x, int64_t axis) {
@@ -2379,7 +2384,7 @@ void om_gemmini_split_3_f32(OMTensor *out0, OMTensor *out1, OMTensor *out2,
  * @param out2  Pre-allocated third output.
  * @param out3  Pre-allocated fourth output.
  * @param x     Input tensor (NCHW f32).
- * @param axis  Split axis (0–3).
+ * @param axis  Split axis (0-3).
  */
 void om_gemmini_split_4_f32(OMTensor *out0, OMTensor *out1, OMTensor *out2,
     OMTensor *out3, const OMTensor *x, int64_t axis) {

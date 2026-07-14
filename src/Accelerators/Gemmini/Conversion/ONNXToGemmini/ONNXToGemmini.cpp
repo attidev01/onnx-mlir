@@ -3,6 +3,12 @@
  */
 
 //===------------ ONNXToGemmini.cpp - ONNX to Gemmini Conversion ---------===//
+//
+// Finds ONNX operations that can be expressed by the Gemmini dialect and
+// rewrites those operations while leaving unsupported patterns on the generic
+// ONNX/Krnl path. This is the first accelerator-specific lowering stage.
+//
+//===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -29,6 +35,8 @@ namespace {
 
 
 static bool isSupportedGemminiMatMul(ONNXMatMulOp op) {
+  // Direct dialect lowering is intentionally narrow: static rank-2 integer
+  // matmul. Float and broader shapes use runtime-call paths later in this file.
   auto aTy = dyn_cast<RankedTensorType>(op.getA().getType());
   auto bTy = dyn_cast<RankedTensorType>(op.getB().getType());
   auto yTy = dyn_cast<RankedTensorType>(op.getY().getType());
@@ -50,6 +58,8 @@ static bool isSupportedGemminiMatMul(ONNXMatMulOp op) {
 
 static bool isStaticRankedTensorOfType(
     Value value, int64_t rank, Type elementType) {
+  // Runtime-call lowerings need static rank/shape so scalar dimensions can be
+  // passed to the C ABI instead of materialized as dynamic tensors.
   auto tensorType = dyn_cast<RankedTensorType>(value.getType());
   return tensorType && tensorType.hasStaticShape() &&
          tensorType.getRank() == rank &&
@@ -62,6 +72,8 @@ static bool isStaticScalarTensorOfType(Value value, Type elementType) {
 
 static bool isSupportedMatMulZeroPoint(
     Value zeroPoint, Type elementType, int64_t expectedLength) {
+  // ONNX allows missing, scalar, or vector zero points. The Gemmini runtime
+  // supports scalar and per-output/per-input-channel forms only.
   if (isNoneValue(zeroPoint))
     return true;
   auto tensorType = dyn_cast<RankedTensorType>(zeroPoint.getType());
@@ -407,7 +419,7 @@ static bool isSupportedGemminiConvTransposeF32(ONNXConvTransposeOp op) {
   auto autoPad = op.getAutoPad();
   if (!autoPad.empty() && autoPad != "NOTSET")
     return false;
-  // Channel consistency: w[0]=C (input), w[1]=M (output) — always static.
+  // Channel consistency: w[0]=C (input), w[1]=M (output); always static.
   ArrayRef<int64_t> wShape = wTy.getShape();
   if (!xTy.isDynamicDim(1) && xTy.getShape()[1] != wShape[0])
     return false;
@@ -813,7 +825,7 @@ static bool isSupportedGemminiSplitF32(ONNXSplitOp op) {
 static bool extractSliceConstants(Value v, SmallVector<int64_t> &out) {
   out.clear();
   if (!v || isa<NoneType>(v.getType()))
-    return true; // absent (optional) – OK
+    return true; // absent (optional) - OK
   SmallVector<int64_t> vals;
   if (!getI64ValuesFromONNXConstantOp(v, vals))
     return false;
@@ -938,7 +950,7 @@ static bool isSupportedGemminiMulF32(ONNXMulOp op) {
     return false;
   if (!hasStaticShapeExceptDims(aTy, {0}) || !hasStaticShapeExceptDims(bTy, {0}))
     return false;
-  // Same shape required — elementwise multiply, no broadcasting.
+  // Same shape required: elementwise multiply, no broadcasting.
   return aTy.getShape() == bTy.getShape();
 }
 
@@ -2094,6 +2106,8 @@ struct GemminiLegalizationPass
     MLIRContext *ctx = &getContext();
     RewritePatternSet patterns(ctx);
     TypeConverter typeConverter;
+    // Keep non-tensor types unchanged and convert ranked tensors to memrefs so
+    // Gemmini runtime calls receive buffer-style operands.
     typeConverter.addConversion([](Type type) { return type; });
     typeConverter.addConversion([](TensorType type) -> std::optional<Type> {
       auto ranked = dyn_cast<RankedTensorType>(type);
@@ -2224,6 +2238,8 @@ std::unique_ptr<mlir::Pass> createONNXToGemminiPass() {
 
 void populateONNXToKrnlForGemmini(mlir::RewritePatternSet &patterns,
     mlir::TypeConverter &typeConverter, mlir::MLIRContext *ctx) {
+  // Used when the generic ONNX-to-Krnl pipeline asks enabled accelerators for
+  // extra rewrite patterns.
   patterns.insert<ONNXMatMulToGemminiLowering,
       ONNXMatMulIntegerDirectToGemminiLowering,
       ONNXMatMulIntegerToGemminiLowering, ONNXQLinearConvToGemminiLowering,

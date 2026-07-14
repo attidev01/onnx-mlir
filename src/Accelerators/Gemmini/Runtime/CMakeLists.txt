@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
+# Build rules for the optional Gemmini runtime library. The runtime is only
+# enabled for RISC-V builds because its ABI headers expand to raw RoCC
+# instructions that host compilers cannot assemble.
 set(GEMMINI_RUNTIME_ENABLED 0 PARENT_SCOPE)
 
 # Path to the Chipyard/Gemmini repository root.

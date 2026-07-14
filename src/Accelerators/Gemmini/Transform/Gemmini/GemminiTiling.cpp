@@ -3,6 +3,12 @@
  */
 
 //===-------------- GemminiTiling.cpp - Gemmini Transform Pass -----------===//
+//
+// Expands high-level Gemmini matmul operations into DIM-sized tile operations.
+// Edge tiles are padded to the hardware tile shape so the downstream GemminiLow
+// lowering can assume full-tile operands.
+//
+//===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -32,6 +38,7 @@ struct GemminiTilingPass
 
   void runOnOperation() override {
     SmallVector<gemmini::GemminiMatmulOp> worklist;
+    // Collect first because tiling replaces each original op with loop nests.
     getOperation().walk([&](gemmini::GemminiMatmulOp op) {
       if (op->hasAttr("gemmini.high_level"))
         worklist.push_back(op);
@@ -43,6 +50,8 @@ struct GemminiTilingPass
 
   void tileMatmul(gemmini::GemminiMatmulOp op) {
     constexpr int64_t tile = gemmini::GemminiTargetInfo::dim;
+    // This tiler currently supports static rank-2 memrefs. Unsupported shapes
+    // remain untouched for later diagnostics or generic lowering.
     auto lhsTy = dyn_cast<MemRefType>(op.getLhs().getType());
     auto rhsTy = dyn_cast<MemRefType>(op.getRhs().getType());
     auto outTy = dyn_cast<MemRefType>(op.getOut().getType());
@@ -71,9 +80,12 @@ struct GemminiTilingPass
     auto inputTileTy = MemRefType::get({tile, tile}, inputElemTy);
     auto outputTileTy = MemRefType::get({tile, tile}, outputElemTy);
 
+    // Configure once outside the generated loop nest; all tiles currently use
+    // the dataflow selected by the original high-level Gemmini op.
     gemmini::GemminiConfigOp::create(rewriter, loc, ws, mlir::BoolAttr{}, mlir::BoolAttr{});
 
     auto iLoop = scf::ForOp::create(rewriter, loc, zero, upperM, step);
+    // Generate an M/N/K loop nest over DIM-sized hardware tiles.
     rewriter.setInsertionPointToStart(iLoop.getBody());
     auto jLoop = scf::ForOp::create(rewriter, loc, zero, upperN, step);
     rewriter.setInsertionPointToStart(jLoop.getBody());
@@ -130,6 +142,8 @@ struct GemminiTilingPass
         rewriter, loc, inputTileTy, bTile, tileDepth, tileCols);
 
     auto bufferIfOp = scf::IfOp::create(rewriter, loc, useBufferZero, true);
+    // Alternate between two scratchpad buffer slots along K. This keeps the
+    // schedule explicit and leaves a path for future double-buffering.
     rewriter.setInsertionPointToStart(&bufferIfOp.getThenRegion().front());
     emitBufferedMatmulTile(rewriter, loc, paddedATile, paddedBTile,
         paddedOutTile, kIsZero, identity, accumulate, ws,
@@ -153,6 +167,8 @@ struct GemminiTilingPass
   static void setMatmulScheduleAttrs(PatternRewriter &rewriter,
       gemmini::GemminiMatmulOp op, int64_t bufferSlot, int64_t lhsSpadOffset,
       int64_t rhsSpadOffset) {
+    // Store scheduling decisions as attributes so later low-level passes can
+    // allocate and lower without recovering loop context.
     op->setAttr("gemmini.lowered", rewriter.getUnitAttr());
     op->setAttr("gemmini.buffer_slot",
         rewriter.getI64IntegerAttr(bufferSlot));
@@ -167,6 +183,8 @@ struct GemminiTilingPass
       StringAttr identity, StringAttr accumulate, StringAttr dataflow,
       int64_t bufferSlot, int64_t lhsSpadOffset, int64_t rhsSpadOffset) {
     constexpr int64_t tile = gemmini::GemminiTargetInfo::dim;
+    // Every tile loads A and B, then chooses identity for the first K tile or
+    // accumulate for later K tiles targeting the same output tile.
     gemmini::GemminiMvinOp::create(rewriter, loc, paddedATile,
         rewriter.getI64IntegerAttr(lhsSpadOffset),
         rewriter.getI64IntegerAttr(tile), rewriter.getI64IntegerAttr(tile));
@@ -202,6 +220,8 @@ struct GemminiTilingPass
   }
 
   static void zeroFillTile(PatternRewriter &rewriter, Location loc, Value tile) {
+    // Edge tiles are zero-filled before valid data is copied into the leading
+    // subview, matching Gemmini's full-tile execution shape.
     auto tileTy = cast<MemRefType>(tile.getType());
     Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
     Value upper0 =
@@ -223,6 +243,8 @@ struct GemminiTilingPass
 
   static Value createPaddedTile(PatternRewriter &rewriter, Location loc,
       MemRefType tileTy, Value usedRows, Value usedCols) {
+    // Allocate a full hardware tile and clear it. The usedRows/usedCols values
+    // document the valid subview size for callers that copy data in or out.
     Value paddedTile = memref::AllocaOp::create(rewriter, loc, tileTy);
     zeroFillTile(rewriter, loc, paddedTile);
     (void)usedRows;
@@ -232,6 +254,7 @@ struct GemminiTilingPass
 
   static Value createPaddedOperandTile(PatternRewriter &rewriter, Location loc,
       MemRefType tileTy, Value srcTile, Value usedRows, Value usedCols) {
+    // Copy the valid operand subview into a zero-padded DIM x DIM tile.
     Value paddedTile = createPaddedTile(rewriter, loc, tileTy, usedRows, usedCols);
     SmallVector<OpFoldResult> offsets{rewriter.getIndexAttr(0),
         rewriter.getIndexAttr(0)};
@@ -246,6 +269,7 @@ struct GemminiTilingPass
 
   static void copyBackOutputTile(PatternRewriter &rewriter, Location loc,
       Value paddedTile, Value dstTile, Value usedRows, Value usedCols) {
+    // Copy only the valid portion of a padded output tile back to the result.
     SmallVector<OpFoldResult> offsets{rewriter.getIndexAttr(0),
         rewriter.getIndexAttr(0)};
     SmallVector<OpFoldResult> sizes{usedRows, usedCols};

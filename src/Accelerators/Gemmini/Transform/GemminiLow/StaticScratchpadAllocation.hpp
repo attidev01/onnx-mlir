@@ -16,6 +16,7 @@
 
 namespace onnx_mlir {
 
+// Create the pass that assigns static scratchpad/accumulator row offsets.
 std::unique_ptr<mlir::Pass> createStaticScratchpadAllocationPass();
 
 } // namespace onnx_mlir

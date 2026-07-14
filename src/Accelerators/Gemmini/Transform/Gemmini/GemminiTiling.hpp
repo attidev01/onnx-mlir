@@ -19,7 +19,7 @@
 
 namespace onnx_mlir {
 
-// Create the Gemmini tiling / scheduling pass.
+// Create the Gemmini tiling/scheduling pass for high-level matmul ops.
 std::unique_ptr<mlir::Pass> createGemminiTilingPass();
 
 } // namespace onnx_mlir

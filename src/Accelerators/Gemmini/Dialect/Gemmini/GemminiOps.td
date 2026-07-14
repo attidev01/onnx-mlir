@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// TableGen definitions for the high-level Gemmini dialect. These ops represent
+// scheduled accelerator work before scratchpad addresses and RoCC instruction
+// details are made explicit by later lowering passes.
+
 #ifndef GEMMINI_OPS
 #define GEMMINI_OPS
 

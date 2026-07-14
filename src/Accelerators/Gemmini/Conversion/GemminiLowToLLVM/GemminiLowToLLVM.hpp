@@ -16,6 +16,7 @@
 
 namespace onnx_mlir {
 
+// Create the pass that lowers GemminiLow ops to LLVM/RoCC inline assembly.
 std::unique_ptr<mlir::Pass> createGemminiLowToLLVMPass();
 
 } // namespace onnx_mlir

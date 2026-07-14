@@ -16,6 +16,7 @@
 
 namespace onnx_mlir {
 
+// Create the pass that rewrites high-level Gemmini ops into GemminiLow ops.
 std::unique_ptr<mlir::Pass> createGemminiToGemminiLowPass();
 
 } // namespace onnx_mlir

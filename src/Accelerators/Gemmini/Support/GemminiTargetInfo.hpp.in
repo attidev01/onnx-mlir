@@ -22,6 +22,12 @@
 namespace onnx_mlir {
 namespace gemmini {
 
+/** Compiler-visible Gemmini hardware parameters.
+ *
+ * CMake configures this template from the bundled hardware ABI header so
+ * compiler passes and runtime code share one source of truth for DIM,
+ * scratchpad size, accumulator size, and element widths.
+ */
 struct GemminiTargetInfo {
   // Matrix array dimension from Gemmini's DIM parameter.
   static constexpr int64_t dim = @GEMMINI_TARGET_DIM@;
@@ -60,6 +66,7 @@ struct GemminiTargetInfo {
     int64_t kTiles;
   };
 
+  /** Return how many DIM-sized tiles cover an MxK by KxN matmul. */
   static constexpr MatmulTileCounts getMatmulTileCounts(
       int64_t m, int64_t n, int64_t k) {
     return {ceilDiv(m, dim), ceilDiv(n, dim), ceilDiv(k, dim)};

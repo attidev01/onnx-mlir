@@ -19,10 +19,11 @@
 
 namespace onnx_mlir {
 
-// Create the ONNX-to-Gemmini conversion pass for the currently supported direct
-// Gemmini matmul slice.
+// Create the ONNX-to-Gemmini conversion pass for supported dialect/runtime
+// paths.
 std::unique_ptr<mlir::Pass> createONNXToGemminiPass();
 
+// Add Gemmini rewrite patterns to a shared ONNX-to-Krnl conversion pipeline.
 void populateONNXToKrnlForGemmini(
     mlir::RewritePatternSet &patterns, mlir::TypeConverter &typeConverter,
     mlir::MLIRContext *ctx);

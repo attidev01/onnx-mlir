@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
+# Generate and build the high-level Gemmini dialect. These ops represent
+# accelerator-selected computation before scratchpad addresses and low-level
+# RoCC instruction details are assigned.
 add_onnx_mlir_dialect(Gemmini gemmini)
 add_onnx_mlir_dialect_doc(gemmini GemminiOps.td)
 

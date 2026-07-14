@@ -2,6 +2,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+//===------------------------ GemminiOps.cpp ------------------------------===//
+//
+// Registers the high-level Gemmini dialect operations generated from
+// GemminiOps.td and supplies hand-written hooks for memory side effects.
+//
+//===----------------------------------------------------------------------===//
+
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
 #include "src/Accelerators/Gemmini/Dialect/Gemmini/GemminiOps.hpp"
@@ -12,6 +19,7 @@ namespace onnx_mlir {
 namespace gemmini {
 
 void GemminiDialect::initialize() {
+  // Operation classes are generated from GemminiOps.td by mlir-tblgen.
   addOperations<
 #define GET_OP_LIST
 #include "src/Accelerators/Gemmini/Dialect/Gemmini/GemminiOps.cpp.inc"
@@ -21,6 +29,7 @@ void GemminiDialect::initialize() {
 void GemminiConfigOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // Configuration writes hardware state even though it has no SSA result.
   effects.emplace_back(
       MemoryEffects::Write::get(), SideEffects::DefaultResource::get());
 }
@@ -32,7 +41,7 @@ void GemminiMvinOp::getEffects(
       SideEffects::DefaultResource::get());
   // Write models the DMA into the Gemmini scratchpad (hardware-external state).
   // Without this, MLIR's DCE removes the op because it has no result uses and
-  // no visible Write effect — treating it as trivially dead.
+  // no visible Write effect, so it would be treated as trivially dead.
   effects.emplace_back(MemoryEffects::Write::get(),
       SideEffects::DefaultResource::get());
 }
@@ -40,6 +49,7 @@ void GemminiMvinOp::getEffects(
 void GemminiMvoutOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // Mvout writes the destination memref from Gemmini scratchpad state.
   effects.emplace_back(MemoryEffects::Write::get(), &getDestMutable(),
       SideEffects::DefaultResource::get());
 }
@@ -47,6 +57,7 @@ void GemminiMvoutOp::getEffects(
 void GemminiFenceOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // A fence orders prior hardware commands, so model it as a side-effecting op.
   effects.emplace_back(
       MemoryEffects::Write::get(), SideEffects::DefaultResource::get());
 }
@@ -54,6 +65,7 @@ void GemminiFenceOp::getEffects(
 void GemminiMatmulOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  // Matmul consumes two visible operands and writes the visible output memref.
   effects.emplace_back(MemoryEffects::Read::get(), &getLhsMutable(),
       SideEffects::DefaultResource::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getRhsMutable(),
