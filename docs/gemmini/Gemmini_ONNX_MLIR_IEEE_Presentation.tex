@@ -224,6 +224,351 @@
 \end{frame}
 
 % 2b
+\begin{frame}{Why ONNX-MLIR Is Useful}
+  \scriptsize
+  \begin{block}{Paper basis}
+    Based on \textit{Compiling ONNX Neural Network Models Using MLIR} by Tian Jin, Gheorghe-Teodor Bercea, Tung D. Le, Tong Chen, Gong Su, Haruki Imai, Yasushi Negishi, Anh Leu, Kevin O'Brien, Kiyokuni Kawachiya, and Alexandre E. Eichenberger.
+  \end{block}
+
+  \vspace{0.3em}
+  \centering
+  \resizebox{0.96\textwidth}{!}{%
+  \begin{tikzpicture}[
+    node distance=0.45cm,
+    center/.style={ellipse,draw=ieeeblue,fill=ieeeblue!10,thick,
+      text width=3.1cm,minimum height=1.0cm,align=center,font=\scriptsize\bfseries},
+    benefit/.style={rectangle,rounded corners,draw=stagegreen,fill=green!8,thick,
+      text width=3.2cm,minimum height=0.82cm,align=center,font=\scriptsize},
+    arrow/.style={-{Latex[length=2mm]},thick,draw=stageorange}
+  ]
+    \node[center] (core) {ONNX-MLIR\\compiler approach};
+    \node[benefit,above left=of core] (native) {\edgeword{Native code}\\model becomes compiled target code};
+    \node[benefit,above right=of core] (portable) {\edgeword{Portable input}\\ONNX separates training framework from deployment};
+    \node[benefit,left=of core] (multi) {\edgeword{Multi-level IR}\\graph meaning first, loops and memory later};
+    \node[benefit,right=of core] (opt) {\edgeword{Optimization hooks}\\graph rewrite, constants, memory, loops};
+    \node[benefit,below left=of core] (target) {\edgeword{Target-specific code}\\tailor output for CPU, mainframe, or accelerator};
+    \node[benefit,below right=of core] (open) {\edgeword{Open compiler stack}\\ONNX + MLIR + LLVM ecosystem};
+
+    \draw[arrow] (core) -- (native);
+    \draw[arrow] (core) -- (portable);
+    \draw[arrow] (core) -- (multi);
+    \draw[arrow] (core) -- (opt);
+    \draw[arrow] (core) -- (target);
+    \draw[arrow] (core) -- (open);
+  \end{tikzpicture}}
+
+  \vspace{0.35em}
+  {\tiny Source: \href{https://arxiv.org/abs/2008.08272}{arXiv:2008.08272, Compiling ONNX Neural Network Models Using MLIR}}
+\end{frame}
+
+% 2c
+\begin{frame}{Why Compile Instead of Only Calling Libraries?}
+  \scriptsize
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Library-call approach}
+        Replace model operations with calls into an optimized library.
+      \end{block}
+      \begin{tabularx}{\textwidth}{@{}lX@{}}
+        \toprule
+        Issue & Why it matters \\
+        \midrule
+        \edgeword{Coverage limit} & Only operations with available library functions are easy to rewrite. \\
+        \edgeword{Extra packages} & Deployment may depend on target-specific runtime stacks. \\
+        \edgeword{Generic kernels} & One library function may not fit every model shape or memory pattern. \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{block}{ONNX-MLIR compiler approach}
+        Rewrite the trained model into native code for the target.
+      \end{block}
+      \begin{tabularx}{\textwidth}{@{}lX@{}}
+        \toprule
+        Benefit & Why it matters \\
+        \midrule
+        \edgeword{Specialization} & The compiler can tailor loops, memory, and calls for this exact model. \\
+        \edgeword{Optimization} & Graph rewriting, constant propagation, memory planning, and loop transforms can happen before runtime. \\
+        \edgeword{Deployment} & The final artifact can be a library or executable with less runtime decision making. \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.45em}
+  \begin{block}{Connection to Gemmini}
+    Gemmini uses the same compiler logic, but adds accelerator-specific dialects, passes, runtime calls, and ABI instructions after ONNX-MLIR has preserved the model semantics.
+  \end{block}
+\end{frame}
+
+% 2d
+\begin{frame}{ONNX-MLIR Benefits Come from Multiple IR Levels}
+  \centering
+  \resizebox{0.96\textwidth}{!}{%
+  \begin{tikzpicture}[
+    node distance=0.55cm,
+    ir/.style={rectangle,rounded corners,draw=ieeeblue,fill=ieeelight,thick,
+      text width=2.55cm,minimum height=0.78cm,align=center,font=\scriptsize},
+    pass/.style={rectangle,rounded corners,draw=stagegreen,fill=green!8,thick,
+      text width=2.85cm,minimum height=0.78cm,align=center,font=\scriptsize},
+    artifactbox/.style={rectangle,rounded corners,draw=stageorange,fill=orange!10,thick,
+      text width=2.55cm,minimum height=0.78cm,align=center,font=\scriptsize},
+    arrow/.style={-{Latex[length=2mm]},thick}
+  ]
+    \node[ir] (onnx) {ONNX dialect\\standard model semantics};
+    \node[pass,right=of onnx] (graph) {graph rewrites\\shape inference\\constant propagation};
+    \node[ir,right=of graph] (krnl) {Krnl dialect\\loop-based lowering point};
+    \node[pass,right=of krnl] (loop) {tiling\\memory planning\\loop transforms};
+    \node[artifactbox,right=of loop] (llvm) {LLVM / native code\\target artifact};
+
+    \draw[arrow,draw=stagegreen] (onnx) -- (graph);
+    \draw[arrow,draw=stagegreen] (graph) -- (krnl);
+    \draw[arrow,draw=stagegreen] (krnl) -- (loop);
+    \draw[arrow,draw=stageorange] (loop) -- (llvm);
+
+    \node[font=\tiny,text=codegray,align=center,text width=2.55cm,below=0.25cm of onnx]
+      {Preserves ONNX operator meaning.};
+    \node[font=\tiny,text=codegray,align=center,text width=2.85cm,below=0.25cm of graph]
+      {Simplifies and specializes the graph before runtime.};
+    \node[font=\tiny,text=codegray,align=center,text width=2.55cm,below=0.25cm of krnl]
+      {Turns tensor ops into explicit computation structure.};
+    \node[font=\tiny,text=codegray,align=center,text width=2.85cm,below=0.25cm of loop]
+      {Makes memory and loop behavior visible to compiler passes.};
+    \node[font=\tiny,text=codegray,align=center,text width=2.55cm,below=0.25cm of llvm]
+      {Produces compiled code instead of interpreting the ONNX graph.};
+  \end{tikzpicture}}
+
+  \vspace{0.55em}
+  \scriptsize
+  \begin{block}{Why this matters}
+    Each IR level exposes a different kind of optimization: ONNX exposes graph semantics, Krnl exposes loops and memory, and LLVM exposes machine-code generation. Gemmini extends this idea with Gemmini and GemminiLow dialects for accelerator-aware lowering.
+  \end{block}
+\end{frame}
+
+% 2e
+\begin{frame}{Optimization Map from the ONNX-MLIR Paper}
+  \centering
+  \resizebox{0.97\textwidth}{!}{%
+  \begin{tikzpicture}[
+    node distance=0.55cm,
+    level/.style={rectangle,rounded corners,draw=ieeeblue,fill=ieeelight,thick,
+      text width=2.75cm,minimum height=0.75cm,align=center,font=\scriptsize\bfseries},
+    optbox/.style={rectangle,rounded corners,draw=stagegreen,fill=green!8,thick,
+      text width=3.0cm,minimum height=0.75cm,align=center,font=\scriptsize},
+    outbox/.style={rectangle,rounded corners,draw=stageorange,fill=orange!10,thick,
+      text width=2.75cm,minimum height=0.75cm,align=center,font=\scriptsize},
+    arrow/.style={-{Latex[length=2mm]},thick}
+  ]
+    \node[level] (onnx) {ONNX dialect\\graph semantics};
+    \node[optbox,below=of onnx] (gopt) {shape inference\\decomposition\\graph rewriting\\constant propagation};
+    \node[level,right=of onnx] (krnl) {Krnl dialect\\loop + memory form};
+    \node[optbox,below=of krnl] (kopt) {memory management\\tiling / blocking\\skew / permutation\\schedule composition};
+    \node[level,right=of krnl] (affine) {Affine / Std / SCF\\structured loops};
+    \node[optbox,below=of affine] (aopt) {canonicalization\\CSE\\affine loop transforms\\lowering cleanup};
+    \node[outbox,right=of affine] (llvm) {LLVM dialect\\native code};
+    \node[optbox,below=of llvm] (native) {target codegen\\SIMD potential\\parallelization\\accelerator hooks};
+
+    \draw[arrow,draw=stagegreen] (onnx) -- (krnl);
+    \draw[arrow,draw=stagegreen] (krnl) -- (affine);
+    \draw[arrow,draw=stageorange] (affine) -- (llvm);
+    \draw[arrow,draw=ieeeblue] (onnx) -- (gopt);
+    \draw[arrow,draw=ieeeblue] (krnl) -- (kopt);
+    \draw[arrow,draw=ieeeblue] (affine) -- (aopt);
+    \draw[arrow,draw=ieeeblue] (llvm) -- (native);
+  \end{tikzpicture}}
+
+  \vspace{0.45em}
+  \scriptsize
+  \begin{block}{Main idea}
+    The paper's key benefit is not one single optimization. It is that each lowering level exposes a different optimization surface: graph transformations at ONNX level, loop and memory transformations at Krnl/Affine level, and native-code generation at LLVM level.
+  \end{block}
+\end{frame}
+
+% 2f
+\begin{frame}{Graph-Level Optimizations: Simplify the Model Early}
+  \scriptsize
+  \begin{tabularx}{\textwidth}{@{}lXX@{}}
+    \toprule
+    Optimization & What it does & Why it helps \\
+    \midrule
+    \edgeword{Operation decomposition} &
+      Replaces complex ONNX ops with simpler supported ops. Example from the paper: \code{ReduceL1(x)} can become \code{ReduceSum(Abs(x))}. &
+      The compiler only needs strong lowerings for a smaller core set of operations. Unsupported-looking models become easier to compile. \\
+    \edgeword{Graph rewriting} &
+      Replaces patterns of operations with better patterns. Example from the paper: \code{MatMul + Add} can become \code{Gemm}. &
+      Removes redundant graph structure and exposes kernels that are easier to optimize or accelerate. \\
+    \edgeword{Identity elimination} &
+      Removes operations that only forward their input. &
+      Reduces graph size and avoids generating useless runtime work. \\
+    \bottomrule
+  \end{tabularx}
+
+  \vspace{0.45em}
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.32cm,
+    box/.style={rectangle,rounded corners,draw=ieeeblue,fill=ieeelight,thick,
+      text width=1.8cm,minimum height=0.58cm,align=center,font=\tiny},
+    good/.style={rectangle,rounded corners,draw=stagegreen,fill=green!8,thick,
+      text width=1.8cm,minimum height=0.58cm,align=center,font=\tiny},
+    arrow/.style={-{Latex[length=1.8mm]},thick}
+  ]
+    \node[box] (matmul) {MatMul};
+    \node[box,right=of matmul] (add) {Add bias};
+    \node[good,right=1.0cm of add] (gemm) {Gemm};
+    \draw[arrow,draw=ieeeblue] (matmul) -- (add);
+    \draw[arrow,draw=stageorange] (add) -- node[above,font=\tiny] {rewrite} (gemm);
+
+    \node[box,below=0.55cm of matmul] (reduce) {ReduceL1};
+    \node[good,right=1.0cm of reduce] (abs) {Abs};
+    \node[good,right=of abs] (sum) {ReduceSum};
+    \draw[arrow,draw=stageorange] (reduce) -- node[above,font=\tiny] {decompose} (abs);
+    \draw[arrow,draw=stagegreen] (abs) -- (sum);
+  \end{tikzpicture}
+\end{frame}
+
+% 2g
+\begin{frame}{Shape, Constant, and Memory Optimizations}
+  \scriptsize
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.32\textwidth}
+      \begin{block}{\edgeword{Shape inference}}
+        Infers ranked tensor shapes from ONNX operations and propagates them to consumers.
+      \end{block}
+      \withoutit{later passes see unknown tensor ranks, so buffer allocation and loop bounds become harder or impossible.}
+    \end{column}
+    \begin{column}{0.32\textwidth}
+      \begin{block}{\edgeword{Constant propagation}}
+        Computes operations at compile time when their inputs are constants, and normalizes expressions so more constants can fold.
+      \end{block}
+      \withoutit{weights, bias transforms, and static shape calculations may become unnecessary runtime work.}
+    \end{column}
+    \begin{column}{0.32\textwidth}
+      \begin{block}{\edgeword{Memory management}}
+        Converts abstract tensors into allocated buffers, tracks lifetimes, and prepares data for lower-level loops and calls.
+      \end{block}
+      \withoutit{compiled code would know the math but not where intermediate tensors should live.}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.45em}
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.45cm,
+    box/.style={rectangle,rounded corners,draw=ieeeblue,fill=ieeelight,thick,
+      text width=2.25cm,minimum height=0.58cm,align=center,font=\tiny},
+    optbox/.style={rectangle,rounded corners,draw=stagegreen,fill=green!8,thick,
+      text width=2.45cm,minimum height=0.58cm,align=center,font=\tiny},
+    arrow/.style={-{Latex[length=1.8mm]},thick}
+  ]
+    \node[box] (unknown) {tensor<*xf32>};
+    \node[optbox,right=of unknown] (shape) {shape inference};
+    \node[box,right=of shape] (ranked) {tensor<1x3x224x224xf32>};
+    \node[optbox,right=of ranked] (alloc) {buffer allocation};
+    \node[box,right=of alloc] (memref) {memref + loops};
+    \draw[arrow,draw=stagegreen] (unknown) -- (shape);
+    \draw[arrow,draw=stagegreen] (shape) -- (ranked);
+    \draw[arrow,draw=stageorange] (ranked) -- (alloc);
+    \draw[arrow,draw=stageorange] (alloc) -- (memref);
+  \end{tikzpicture}
+\end{frame}
+
+% 2h
+\begin{frame}[fragile]{Krnl Optimizations: Separate What to Compute from How to Schedule}
+  \scriptsize
+  \begin{block}{Krnl purpose from the paper}
+    Krnl is a loop-based dialect that gives all ONNX operations a common lowering point. It keeps program semantics separate from schedules, so the compiler can change loop order, tile size, or blocking strategy without changing the mathematical meaning.
+  \end{block}
+
+  \vspace{0.3em}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.47\textwidth}
+\begin{lstlisting}
+%ii = krnl.define_loops 1
+krnl.iterate(%ii) with (%ii -> %i = 0 to 10) {
+  // original computation
+}
+\end{lstlisting}
+      \centering{\tiny Original loop: simple semantics.}
+    \end{column}
+    \begin{column}{0.47\textwidth}
+\begin{lstlisting}
+%ii = krnl.define_loops 1
+%ib, %il = krnl.block %ii 2
+krnl.iterate(%ib, %il) with (%ii -> %i = 0 to 10) {
+  // same computation, scheduled in tiles
+}
+\end{lstlisting}
+      \centering{\tiny Scheduled loop: same math, different execution plan.}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.4em}
+  \begin{tabularx}{\textwidth}{@{}lX@{}}
+    \toprule
+    Schedule optimization & Meaning \\
+    \midrule
+    \edgeword{Blocking / tiling} & Split a loop into outer and inner loops so data can fit cache, scratchpad, or accelerator tiles. \\
+    \edgeword{Permutation} & Reorder loops to improve memory access order or match hardware traversal. \\
+    \edgeword{Skewing} & Change loop coordinates to expose parallelism or legalize transformations. \\
+    \edgeword{Composition} & Combine schedules, such as tile then permute, while keeping the original computation readable. \\
+    \bottomrule
+  \end{tabularx}
+\end{frame}
+
+% 2i
+\begin{frame}{How These Optimizations Help the Gemmini Backend}
+  \scriptsize
+  \begin{tabularx}{\textwidth}{@{}lXX@{}}
+    \toprule
+    ONNX-MLIR optimization idea & General benefit & Gemmini-specific benefit \\
+    \midrule
+    \edgeword{Shape inference} &
+      Makes tensor ranks and dimensions explicit. &
+      Gives Conv/MatMul lowering concrete dimensions for tile sizes, scratchpad planning, and runtime parameters. \\
+    \edgeword{Graph rewriting} &
+      Turns model patterns into better compiler patterns. &
+      Helps identify accelerator-friendly operations such as Conv, MatMul, Gemm-like forms, Add, Pool, and Relu. \\
+    \edgeword{Constant propagation} &
+      Moves static computation to compile time. &
+      Keeps weights and derived constants in the binary instead of recomputing them during inference. \\
+    \edgeword{Memory management} &
+      Decides where intermediate tensors live. &
+      Bridges normal memory buffers to Gemmini runtime calls that move data into scratchpad and accumulator storage. \\
+    \edgeword{Loop tiling} &
+      Breaks large tensor work into smaller chunks. &
+      Matches Gemmini's tile-based systolic array execution and local memory capacity. \\
+    \bottomrule
+  \end{tabularx}
+
+  \vspace{0.45em}
+  \begin{block}{Key message}
+    ONNX-MLIR optimizations are not only CPU optimizations. They are also preparation steps that make accelerator lowering possible: operations become legal, shapes become known, constants become stable, memory becomes explicit, and loops become tileable.
+  \end{block}
+\end{frame}
+
+% 2j
+\begin{frame}{Optimization Terms to Remember}
+  \scriptsize
+  \begin{tabularx}{\textwidth}{@{}lX@{}}
+    \toprule
+    Term & Simple definition \\
+    \midrule
+    \edgeword{Canonicalization} & Rewrite IR into a simpler standard form so later passes see fewer special cases. \\
+    \edgeword{CSE} & Common subexpression elimination: if the same computation appears twice, compute it once and reuse it. \\
+    \edgeword{DRR} & Declarative Rewrite Rule: TableGen-based pattern that says ``replace this operation graph with that one.'' \\
+    \edgeword{Polyhedral optimization} & Mathematical loop optimization for regular loop nests; useful for tiling, scheduling, and memory locality. \\
+    \edgeword{Loop fusion} & Combine neighboring loops so data loaded once can be reused before it leaves cache or scratchpad. \\
+    \edgeword{SIMD optimization} & Generate vector instructions so one CPU instruction operates on multiple data elements. \\
+    \edgeword{Parallelization} & Split independent work across cores, threads, lanes, or accelerator units. \\
+    \bottomrule
+  \end{tabularx}
+
+  \vspace{0.45em}
+  {\tiny Source basis: \href{https://arxiv.org/abs/2008.08272}{Compiling ONNX Neural Network Models Using MLIR}; terms are explained here in presentation language and connected to the Gemmini backend.}
+\end{frame}
+
+% 2k
 \begin{frame}{Who Uses ONNX-MLIR and Why It Matters}
   \scriptsize
   \begin{block}{Context}

@@ -1,0 +1,13 @@
+\frametitle{Example: Gemmini Custom Instructions}
+\begin{lstlisting}
+181be: 00e8b07b  .insn 4, 0x00e8b07b
+18234: 04e5b07b  .insn 4, 0x04e5b07b
+18262: 00f7307b  .insn 4, 0x00f7307b
+182cc: 05e8307b  .insn 4, 0x05e8307b
+182fc: 04f8307b  .insn 4, 0x04f8307b
+  \end{lstlisting}
+  \begin{itemize}
+    \item These lines appear in \code{resnet18\_rv64.disasm}.
+    \item The generic disassembler prints raw custom RISC-V encodings as \code{.insn}.
+    \item They correspond to Gemmini RoCC operations emitted by the ABI/runtime path.
+  \end{itemize}
