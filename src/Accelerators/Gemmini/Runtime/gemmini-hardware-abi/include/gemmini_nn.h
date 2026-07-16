@@ -24,7 +24,7 @@
 // I/J/K are the lowered matrix dimensions used after im2col-style packing.
 struct ConvParams {
     // Input/output tensor dimensions.
-    int batch_size;
+    int batch_size; 
     int in_row_dim;
     int in_col_dim;
     int out_row_dim;

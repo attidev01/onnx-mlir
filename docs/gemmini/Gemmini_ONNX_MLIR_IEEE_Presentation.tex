@@ -109,8 +109,183 @@
   \end{center}
 \end{frame}
 
+% Gemmini dialects comparison
+\begin{frame}{Gemmini vs GemminiLow: Operations and Purpose}
+  \scriptsize
+  \begin{tabularx}{\textwidth}{@{}lXXX@{}}
+    \toprule
+    Layer & Purpose & Example ops & When used in pipeline \\
+    \midrule
+    Gemmini (high-level) & Express accelerator-friendly math with tensor-like operands; preserves
+      some abstraction for scheduling and tiling. & \code{gemmini.matmul}, \code{gemmini.conv}, \code{gemmini.config} & Emitted by \pathcode{Conversion/ONNXToGemmini/ONNXToGemmini.cpp} when pattern matches; input to tiling pass. \\
+    GemminiLow (low-level) & Explicit hardware commands and small operands (tiles), representing
+      individual scratchpad mvin/matmul/mvout sequences suitable for LLVM lowering. & \code{gemmini_low.mvin}, \code{gemmini_low.matmul}, \code{gemmini_low.mvout}, \code{gemmini_low.fence} & Produced by \code{createGemminiToGemminiLowPass()} and tiled by \pathcode{Transform/Gemmini/GemminiTiling.cpp}; consumed by scratchpad allocation and LLVM lowering. \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.5em}
+  {\tiny Notes: Gemmini ops carry higher-level attributes (dataflow, accumulate/identity), while GemminiLow ops record concrete `spad_offset_rows` and `acc_offset_rows` used by \pathcode{Transform/GemminiLow/StaticScratchpadAllocation.cpp}.}
+\end{frame}
+
+% OMTensor layout diagram
+\begin{frame}{OMTensor Descriptor Memory Layout}
+  \scriptsize
+  \begin{center}
+    \begin{tikzpicture}[node distance=0.4cm, font=\scriptsize]
+      \node[draw,rectangle,minimum width=10.5cm,minimum height=1.1cm,fill=ieeeblue!6] (box) {};
+      \node[anchor=west] at (-4.9,0.2) {\textbf{OMTensor*} struct memory (conceptual)};
+      \draw (-4.8,-0.15) rectangle (-1.8,0.6) node[pos=0.5]{\small pointer to C struct};
+      \draw (-1.7,-0.15) rectangle (1.0,0.6) node[pos=0.5]{\small `data_ptr` (raw data buffer)};
+      \draw (1.1,-0.15) rectangle (3.2,0.6) node[pos=0.5]{\small `allocated_ptr` (optional)`};
+      \draw (3.3,-0.15) rectangle (5.0,0.6) node[pos=0.5]{\small `shape*` pointer};
+      \draw (5.1,-0.15) rectangle (6.0,0.6) node[pos=0.5]{\small `rank`};
+      \draw (6.1,-0.15) rectangle (7.8,0.6) node[pos=0.5]{\small `dtype`};
+      \node[below=1.0cm of box,align=left] {\tiny See \pathcode{include/onnx-mlir/Runtime/OMTensor.h} for definitions and API: constructors, \code{omTensorGetDataPtr}, \code{omTensorGetShape}, and ownership semantics.};
+    \end{tikzpicture}
+  \end{center}
+\end{frame}
+
+% 10b
+\begin{frame}{Fallback: Which Ops, How the Decision Is Made, and Performance}
+  \scriptsize
+  \begin{itemize}
+    \item \textbf{Which ops fall back:} any ONNX op that does not meet the Gemmini
+      lowering predicates remains on the standard ONNX-MLIR → Krnl → LLVM path.
+      Typical fallbacks: dynamic-shape tensors, unsupported dtypes (non-i8/i32
+      quantized shapes for direct lowering), grouped convolutions, odd kernel
+      shapes/strides/pads, or ops without a Gemmini pattern.
+    \item \textbf{Where the decision lives:} predicate functions in
+      \pathcode{src/Accelerators/Gemmini/Conversion/ONNXToGemmini/ONNXToGemmini.cpp}
+      (examples: \code{isSupportedGemminiQLinearConv}, \code{isSupportedGemminiMatMulInteger}, \code{isF32StaticTensor}).
+    \item \textbf{Runtime fallbacks:} some runtime helpers (\pathcode{src/Accelerators/Gemmini/Runtime/OMRuntimeGemmini.cpp}) include both a hardware dispatch path and a CPU scalar "reference" implementation. The low-level ABI header \pathcode{src/Accelerators/Gemmini/Runtime/gemmini-hardware-abi/include/gemmini.h} also documents CPU fallbacks.
+    \item \textbf{Performance implications:}
+      \begin{itemize}
+        \item Gemmini path: cost = quantize/pack + `mvin` (DRAM→spad) + tiled compute + `mvout` (spad→DRAM). Great speedups for large, tiled ops that amortize mvin/mvout.
+        \item Fallback (CPU): cost = scalar loops emitted via Krnl/LLVM or runtime scalar helpers — much slower for large matmuls/convs, but lower overhead for tiny tensors.
+        \item Edge cases: small shapes, irregular padding, or non-unit groups often perform better on CPU fallback due to Gemmini dispatch overhead.
+      \end{itemize}
+    \item \textbf{Where tiling/placement matters:} the tiling pass (\pathcode{src/Accelerators/Gemmini/Transform/Gemmini/GemminiTiling.cpp}) enforces DIM×DIM tiles (\code{GemminiTargetInfo::dim}) and static scratchpad allocation (\pathcode{src/Accelerators/Gemmini/Transform/GemminiLow/StaticScratchpadAllocation.cpp}), which both affect whether a shape benefits from acceleration.
+  \end{itemize}
+  \vspace{0.5em}
+  {\tiny For exact numbers and tradeoffs we will run ResNet-18 benchmarks (see task 17); small microbenchmarks usually show 5–50× speedups for well-tiled matmul/conv, but results vary widely with tile size, memory bandwidth, and quantization overhead.}
+\end{frame}
+
+
+% Convolution memory example
+\begin{frame}{Convolution: ONNX Runtime vs ONNX-MLIR Runtime (memory example)}
+  \scriptsize
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{ONNX Runtime (library-call model)}
+        - Tensors: contiguous host buffers (float32 pointers) with separate shape metadata.\\
+        - Convolution executed by a library/kernel that reads/writes host memory directly.\\
+        - No compiler-generated ABI glue: model invokes library kernels with raw pointers.
+      \end{block}
+
+      \begin{lstlisting}
+// simplified: direct convolution kernel (pseudo-C)
+void conv_naive(float *out, const float *x, const float *w,
+                int N,int C,int H,int W,int K,int R,int S){
+  for(n...) for(k...) for(h...) for(w...)
+    for(c...) for(r...) for(s...)
+      out[idx] += x[xidx] * w[widx];
+}
+      \end{lstlisting}
+    \end{column}
+
+    \begin{column}{0.48\textwidth}
+      \begin{block}{ONNX-MLIR Runtime + Gemmini (compiler path)}
+        - Generated model code uses `OMTensor` descriptors (pointer, rank, shape[], data ptr).\\
+        - Calls are lowered to runtime helpers (e.g., \code{om_gemmini_conv_f32}) which prepare data for Gemmini.
+      \end{block}
+
+      \begin{lstlisting}
+// Generated by compiler (pseudo-C)
+OMTensor *x = omTensorFromBuffer(xbuf, /*shape*/{1,C,H,W}, 4);
+OMTensor *w = omTensorFromBuffer(wbuf, /*shape*/{K,C,R,S}, 4);
+OMTensor *out = omTensorAlloc(...);
+om_gemmini_conv_f32(out, x, w, stride, pad);
+      \end{lstlisting}
+
+      \vspace{0.4em}
+      {\tiny \textbf{What the runtime does (high level):} allocate OMTensor descriptors → (optional) quantize/pack to i8 → issue Gemmini `mvin` commands to scratchpad → dispatch Gemmini `matmul`/`conv` via RoCC → `mvout` results back → dequantize if needed.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
 % 2
 \sectiondivider{Big Picture}{Start with the whole path before diving into files, functions, and ABI details.}
+% ABI definition inserted early for clarity
+\begin{frame}{Gemmini ABI: Definition and Contract}
+  \scriptsize
+  \begin{itemize}
+    \item The Gemmini ABI is the C-level contract between generated model code and the runtime/Gemmini helper library.
+    \item Public runtime entry points: declared in \pathcode{src/Accelerators/Gemmini/Runtime/OMRuntimeGemmini.hpp} and implemented in \pathcode{src/Accelerators/Gemmini/Runtime/OMRuntimeGemmini.cpp}.
+    \item Gemmini hardware ABI macros and helper inline assembly live in \pathcode{src/Accelerators/Gemmini/Runtime/gemmini-hardware-abi/include/gemmini.h}.
+    \item Key calling conventions:
+      \begin{itemize}
+        \item Runtime uses `OMTensor*` descriptors for tensors (pointer, rank, shape, data pointer).
+        \item Gemmini RoCC commands are emitted through `ROCC_INSTRUCTION_*` macros which pack arguments into `rs1`/`rs2` registers.
+        \item The runtime performs tiling/packing then issues Gemmini commands (CONFIG, MVIN, COMPUTE, MVOUT) according to `gemmini.h` macros.
+      \end{itemize}
+    \item See \pathcode{src/Accelerators/Gemmini/Runtime/gemmini-hardware-abi/include/gemmini.h} for the exact macro names and packing formats used by the compiler's inline-asm emission.
+  \end{itemize}
+\end{frame}
+
+% Quantization support slide
+\begin{frame}{Quantization Support and Data Paths}
+  \scriptsize
+  \begin{itemize}
+    \item ONNX-MLIR supports quantized paths that target Gemmini's efficient int8 systolic array.
+    \item Conversion path: \code{ONNXToGemmini.cpp} detects QLinearConv / MatMulInteger patterns and lowers them to Gemmini-backed calls when supported.
+    \item Runtime path: quantized helpers (`om_gemmini_qlinearconv_i8`, `om_gemmini_matmulinteger_i8i8acc32`) are implemented in \pathcode{src/Accelerators/Gemmini/Runtime/OMRuntimeGemmini.cpp}.
+    \item Data flow for quantized conv/matmul:
+      \begin{enumerate}
+        \item Quantize f32 inputs (if dynamic path) or use i8 inputs as-is.
+        \item Repack weights to Gemmini layout (e.g., HWOI) using `packOIHWtoHWOI` helper.
+        \item Call tiled Gemmini helpers (`tiled_matmul_auto` / `tiled_conv_auto`) which emit RoCC commands.
+        \item Dequantize accumulators to f32 if needed.
+      \end{enumerate}
+    \item Files to inspect: \pathcode{src/Accelerators/Gemmini/Conversion/ONNXToGemmini/ONNXToGemmini.cpp}, \pathcode{src/Accelerators/Gemmini/Runtime/OMRuntimeGemmini.cpp}.
+  \end{itemize}
+\end{frame}
+
+% Hardware params mapping slide
+\begin{frame}{Map: Hardware Parameters → Source Files}
+  \scriptsize
+  \begin{tabularx}{\textwidth}{@{}lX@{}}
+    \toprule
+    Hardware Parameter & Source / Location \\
+    \midrule
+    Array dimension (`DIM`) & \pathcode{src/Accelerators/Gemmini/Support/GemminiTargetInfo.hpp} and generated \code{gemmini_params.h} in \code{gemmini-hardware-abi/include} \\
+    Scratchpad rows & \code{GemminiTargetInfo::scratchpadRows()} in \pathcode{Support/GemminiTargetInfo.hpp} and \pathcode{gemmini-hardware-abi/include/gemmini_params.h} \\
+    Accumulator rows & \code{GemminiTargetInfo::accRows()} (same files) \\
+    Data types (`elem_t`, `acc_t`) & \pathcode{gemmini-hardware-abi/include/gemmini_params.h} \\
+    Inline-asm packing formats & \pathcode{src/Accelerators/Gemmini/Conversion/GemminiLowToLLVM/GemminiLowToLLVM.cpp} and \pathcode{gemmini-hardware-abi/include/gemmini.h} \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.4em}
+  \tiny
+  These mappings help you find where a hardware parameter is read or enforced by passes (tiler, allocation) and where matching ABI headers assert expected sizes/typedefs.
+\end{frame}
+
+% Troubleshooting slide
+\begin{frame}{Troubleshooting Checklist}
+  \scriptsize
+  \begin{itemize}
+    \item Undefined runtime symbols after linking: ensure \code{libgemmini_f32_rv64.a} and \code{libcruntime_rv64.a} are provided and in correct link order (object files before archives).
+    \item No \code{.insn} in disassembly: check that runtime was compiled for RISC-V and that Gemmini ABI headers were present during runtime build.
+    \item Scratchpad allocation failure: reduce tile size (\code{DIM}) or inspect \pathcode{StaticScratchpadAllocation.cpp} for allocation policy limits.
+    \item Wrong weight layout: verify repacking helper `packOIHWtoHWOI` was called and that OMTensor weight pointers match emitted global symbols.
+    \item Spike/Simulator mismatch: ensure Spike is built with Gemmini extension and that `--extension=gemmini` is used.
+  \end{itemize}
+  \vspace{0.4em}
+  \begin{lstlisting}[language=bash]
+# Useful quick checks
+riscv64-linux-gnu-nm -u resnet18.o | grep om_gemmini_
+riscv64-linux-gnu-nm -S libgemmini_f32_rv64.a | grep om_gemmini_
+riscv64-linux-gnu-objdump -d resnet18_rv64 | grep -E '\.insn|om_gemmini_'
+  \end{lstlisting}
+\end{frame}
 
 % 2
 \begin{frame}{How ONNX Moves to FPGA Execution}
@@ -190,6 +365,21 @@
     {\tiny\color{codegray}\textbf{How to Read This Slide:}
     green arrows = compiler lowering, blue arrows = binary build/link, orange arrows = runtime/ABI calls, red arrows = hardware command/data movement.
     Text boxes are separated by lanes to avoid mixing source files, compiler IR, runtime code, and FPGA blocks.}
+    \\[0.4em]
+    {\scriptsize\textbf{Step-by-step walkthrough (maps arrows to files and passes):}}
+    \vspace{0.15em}
+    {\scriptsize\begin{enumerate}
+      \item \textbf{Green (compiler lowering):} selection and lowering are implemented in
+        \pathcode{src/Accelerators/Gemmini/Conversion/ONNXToGemmini/ONNXToGemmini.cpp} (matches supported ONNX ops and emits either \code{krnl.call} to runtime helpers or high-level `gemmini.*` ops). Follow-up Gemmini passes are declared in \pathcode{src/Accelerators/Gemmini/Pass/GemminiPasses.hpp} and include:
+        \begin{itemize}\item \code{createGemminiTilingPass()} → \pathcode{src/Accelerators/Gemmini/Transform/Gemmini/GemminiTiling.cpp}
+        \item \code{createGemminiToGemminiLowPass()} → lowers Gemmini → GemminiLow
+        \item \code{createStaticScratchpadAllocationPass()} → \pathcode{src/Accelerators/Gemmini/Transform/GemminiLow/StaticScratchpadAllocation.cpp}
+        \item \code{createGemminiLowRewritePass()} and \code{createGemminiLowToLLVMPass()} → lower to LLVM with RoCC/inline assembly.
+        \end{itemize}
+      \item \textbf{Blue (binary build/link):} LLVM dialect emitted by the final lowering is converted to LLVM IR and toolchain steps (`llc`, linker) produce the RV64 ELF; the generated model and runtime implementations (e.g., \pathcode{src/Accelerators/Gemmini/Runtime/OMRuntimeGemmini.cpp}) are linked together with ABI headers (\pathcode{src/Accelerators/Gemmini/Runtime/gemmini-hardware-abi/include/gemmini.h}).
+      \item \textbf{Orange (runtime / ABI):} model calls become C ABI calls declared in \pathcode{src/Accelerators/Gemmini/Runtime/OMRuntimeGemmini.hpp} (e.g., \code{om_gemmini_conv_f32}) and implemented in the runtime source; the ABI macros and RoCC field encodings are in \pathcode{src/Accelerators/Gemmini/Runtime/gemmini-hardware-abi/include/gemmini.h}.
+      \item \textbf{Red (hardware):} the RoCC-expanded Gemmini commands are executed by the RISC-V core and Gemmini controllers; hardware parameters used by compiler decisions live in \pathcode{src/Accelerators/Gemmini/Support/GemminiTargetInfo.hpp} (mesh dimension, scratchpad rows, accumulator rows) and are referenced throughout the passes above.
+    \end{enumerate}}
   \end{minipage}
 \end{frame}
 
@@ -1238,168 +1428,46 @@ krnl.iterate(%ib, %il) with (%ii -> %i = 0 to 10) {
   \end{center}
 \end{frame}
 
-% 5r
-\begin{frame}{Hailo Pipeline: AOT Compiler Suite Example}
-  \centering
-  \begin{tikzpicture}[
-    scale=0.78,
-    every node/.style={transform shape},
-    node distance=0.42cm,
-    src/.style={rectangle,rounded corners,draw=ieeeblue,fill=ieeelight,thick,
-      text width=2.05cm,minimum height=0.70cm,align=center,font=\scriptsize},
-    comp/.style={rectangle,rounded corners,draw=stagegreen,fill=green!8,thick,
-      text width=2.28cm,minimum height=0.70cm,align=center,font=\scriptsize},
-    art/.style={rectangle,rounded corners,draw=stageorange,fill=orange!10,thick,
-      text width=2.10cm,minimum height=0.70cm,align=center,font=\scriptsize},
-    rt/.style={rectangle,rounded corners,draw=red!70!black,fill=red!8,thick,
-      text width=2.10cm,minimum height=0.70cm,align=center,font=\scriptsize},
-    arrow/.style={-{Latex[length=2mm]},thick}
-  ]
-    \node[src] (onnx) {ONNX / TF model};
-    \node[comp,right=of onnx] (parse) {Hailo parser\\creates HAR};
-    \node[comp,right=of parse] (opt) {optimization +\\quantization};
-    \node[art,right=of opt] (har) {optimized HAR\\hardware-aware graph};
-    \node[comp,right=of har] (compile) {Hailo compiler\\maps to silicon};
-    \node[art,right=of compile] (hef) {HEF file\\compiled artifact};
-    \node[rt,right=of hef] (hailort) {HailoRT\\loads HEF};
-    \node[rt,right=of hailort] (chip) {Hailo chip\\executes dataflow};
-
-    \draw[arrow,draw=ieeeblue] (onnx) -- (parse);
-    \draw[arrow,draw=stagegreen] (parse) -- (opt);
-    \draw[arrow,draw=stagegreen] (opt) -- (har);
-    \draw[arrow,draw=stagegreen] (har) -- (compile);
-    \draw[arrow,draw=stageorange] (compile) -- (hef);
-    \draw[arrow,draw=red!70!black] (hef) -- (hailort);
-    \draw[arrow,draw=red!70!black] (hailort) -- (chip);
-  \end{tikzpicture}
-
-  \vspace{0.55em}
+% Condensed Hailo comparison (replaces multiple Hailo-specific slides)
+\begin{frame}{Hailo vs ONNX-MLIR — Condensed Comparison}
   \scriptsize
-  \begin{block}{What this shows}
-    Hailo uses an ahead-of-time compiler flow: the model is parsed, optimized, quantized, mapped onto the physical dataflow resources of the chip, and emitted as a fixed compiled artifact. Production inference loads the compiled artifact; it does not need ONNX Runtime to interpret the original graph.
-  \end{block}
-
-  \vspace{0.2em}
-  {\tiny Sources:
-  \href{https://hailo.ai/developer-zone/documentation/}{Hailo Developer Zone documentation}
-  \quad|\quad
-  \href{https://github.com/hailo-ai/hailo_model_zoo}{Hailo Model Zoo}}
+  \begin{itemize}
+    \item Both use ahead-of-time compilation: Hailo emits hardware-specific HEF artifacts; ONNX-MLIR emits native ELF/shared objects for RISC-V + Gemmini.
+    \item Key differences: Hailo maps graphs to a spatial dataflow substrate and uses vendor runtime (HailoRT); ONNX-MLIR lowers to MLIR/LLVM and links against Gemmini runtime + ABI.
+    \item Practical points: Hailo commonly expects NHWC + int8; ONNX-MLIR defaults to NCHW + float32 unless quantized. Both avoid interpreting the ONNX graph at inference time.
+    \item Developer takeaway: keep Hailo slides as illustrative background; focus remaining talk on ONNX-MLIR/Gemmini implementation details and code-paths.
+  \end{itemize}
 \end{frame}
 
-% 5s
-\begin{frame}{Hailo and ONNX-MLIR Share the Same Compiler Philosophy}
-  \centering
-  \begin{tikzpicture}[
-    scale=0.78,
-    every node/.style={transform shape},
-    node distance=0.38cm,
-    label/.style={font=\scriptsize\bfseries,text=codegray,align=right,text width=2.0cm},
-    box/.style={rectangle,rounded corners,draw=ieeeblue,fill=ieeelight,thick,
-      text width=2.35cm,minimum height=0.68cm,align=center,font=\scriptsize},
-    comp/.style={rectangle,rounded corners,draw=stagegreen,fill=green!8,thick,
-      text width=2.35cm,minimum height=0.68cm,align=center,font=\scriptsize},
-    artifact/.style={rectangle,rounded corners,draw=stageorange,fill=orange!10,thick,
-      text width=2.35cm,minimum height=0.68cm,align=center,font=\scriptsize},
-    arrow/.style={-{Latex[length=2mm]},thick}
-  ]
-    \node[label] at (-1.0,1.15) {Hailo suite};
-    \node[box] (h1) at (1.45,1.15) {ONNX model};
-    \node[comp,right=of h1] (h2) {parse + optimize\\quantize};
-    \node[comp,right=of h2] (h3) {map to Hailo\\silicon grid};
-    \node[artifact,right=of h3] (h4) {HEF artifact};
-    \node[artifact,right=of h4] (h5) {HailoRT + chip};
-
-    \node[label] at (-1.0,-1.15) {ONNX-MLIR\\Gemmini};
-    \node[box] (g1) at (1.45,-1.15) {ONNX model};
-    \node[comp,right=of g1] (g2) {MLIR lowering\\Gemmini passes};
-    \node[comp,right=of g2] (g3) {runtime calls\\Gemmini ABI};
-    \node[artifact,right=of g3] (g4) {RV64 ELF};
-    \node[artifact,right=of g4] (g5) {Spike / hardware};
-
-    \draw[arrow,draw=stagegreen] (h1) -- (h2);
-    \draw[arrow,draw=stagegreen] (h2) -- (h3);
-    \draw[arrow,draw=stageorange] (h3) -- (h4);
-    \draw[arrow,draw=red!70!black] (h4) -- (h5);
-
-    \draw[arrow,draw=stagegreen] (g1) -- (g2);
-    \draw[arrow,draw=stagegreen] (g2) -- (g3);
-    \draw[arrow,draw=stageorange] (g3) -- (g4);
-    \draw[arrow,draw=red!70!black] (g4) -- (g5);
-  \end{tikzpicture}
-
-  \vspace{0.55em}
-  \scriptsize
-  \begin{tabularx}{\textwidth}{@{}lX@{}}
-    \toprule
-    Shared idea & Explanation \\
-    \midrule
-    \edgeword{AOT compilation} &
-      Both paths move expensive graph analysis and hardware mapping before deployment. \\
-    \edgeword{No production ONNX graph interpreter} &
-      In production, Hailo loads HEF and ONNX-MLIR/Gemmini runs an ELF; neither path needs ONNX Runtime to interpret the original ONNX graph. \\
-    \edgeword{Hardware-specific artifact} &
-      Hailo emits an artifact for Hailo silicon; ONNX-MLIR/Gemmini emits code and ABI calls for RISC-V + Gemmini. \\
-    \bottomrule
-  \end{tabularx}
-\end{frame}
-
-% 5t
-\begin{frame}[fragile]{Mirror Code: HailoRT vs ONNX-MLIR Runtime}
+% TableGen before/after examples
+\begin{frame}[fragile]{TableGen: Before and After}
   \scriptsize
   \begin{columns}[T,onlytextwidth]
     \begin{column}{0.48\textwidth}
-      \begin{block}{HailoRT idea}
-        Python loads a compiled \edgeword{HEF} artifact, opens hardware streams, and pushes preprocessed tensors toward the Hailo NPU.
-      \end{block}
-      \centering
-      \begin{tikzpicture}[
-        scale=0.72,
-        every node/.style={transform shape},
-        node distance=0.25cm,
-        flowbox/.style={rectangle,rounded corners,draw=ieeeblue,fill=ieeelight,thick,
-          text width=1.9cm,minimum height=0.58cm,align=center,font=\tiny},
-        arrow/.style={-{Latex[length=1.6mm]},thick,draw=stageorange}
-      ]
-        \node[flowbox] (hef) {HEF};
-        \node[flowbox,right=of hef] (vdev) {VDevice};
-        \node[flowbox,right=of vdev] (stream) {vstreams};
-        \node[flowbox,right=of stream] (npu) {Hailo NPU};
-        \draw[arrow] (hef) -- (vdev);
-        \draw[arrow] (vdev) -- (stream);
-        \draw[arrow] (stream) -- (npu);
-      \end{tikzpicture}
-    \end{column}
-    \begin{column}{0.50\textwidth}
-      \begin{block}{Equivalent ONNX-MLIR PyRuntime idea}
-        Python loads a compiled \edgeword{.so} artifact and calls native compiled model code through \code{OMExecutionSession}.
-      \end{block}
-\begin{lstlisting}[language=Python]
-import numpy as np
-import cv2
-from PyRuntime import OMExecutionSession
-
-SO_FILE = "my_compiled_model.so"   # like Hailo .hef
-IMAGE_FILE = "test_image.jpg"
-
-session = OMExecutionSession(SO_FILE)
-
-batch, channels, height, width = 1, 3, 224, 224
-img = cv2.imread(IMAGE_FILE)
-img = cv2.resize(img, (width, height))
-img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-img = img.transpose(2, 0, 1)       # NHWC -> NCHW
-input_data = np.ascontiguousarray(
-    np.expand_dims(img, axis=0), dtype=np.float32)
-
-outputs = session.run([input_data])
-print(outputs[0].shape)
+      \begin{block}{TableGen input (example)}
+\begin{lstlisting}
+def GemminiInst <  ... > {
+  let dag = { ... };
+  let pseudo = "gemmini.mvin $rs1, $rd";
+}
 \end{lstlisting}
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Generated C++ (snippet)}
+\begin{lstlisting}
+// Auto-generated: instruction decoder
+case GemminiInst: {
+  uint64_t rs1 = extractField(insn, ...);
+  emitMvin(rs1, rd);
+  break;
+}
+\end{lstlisting}
+      \end{block}
     \end{column}
   \end{columns}
-
-  \vspace{0.25em}
-  {\tiny
-  In both versions, Python is only the host-side plumbing: it prepares NumPy memory and sends it into a compiled black box. No runtime loop inspects the ONNX graph during inference.}
+  \vspace{0.3em}
+  {\tiny TableGen reduces repetitive decoder and instruction descriptions into compact declarative inputs, producing consistent C++/LLVM tables used by the backend.}
 \end{frame}
 
 % 5u
@@ -2076,54 +2144,39 @@ def Gemmini_ConvOp : Gemmini_Op<"conv", [...]> {
   \pathcode{src/Accelerators/Gemmini/}
 \end{frame}
 
-% 15b
-\begin{frame}{How the Gemmini Backend Is Organized}
-  \centering
-  \vspace*{-0.2em}
-  \begin{tikzpicture}[
-    scale=0.82,
-    every node/.style={transform shape},
-    root/.style={rectangle,rounded corners,draw=ieeeblue,fill=ieeeblue!8,thick,
-      text width=4.2cm,minimum height=0.7cm,align=center,font=\scriptsize},
-    folder/.style={rectangle,rounded corners,draw=stagegreen,fill=green!8,thick,
-      text width=2.65cm,minimum height=0.72cm,align=center,font=\scriptsize},
-    file/.style={rectangle,rounded corners,draw=ieeeblue,fill=ieeelight,thick,
-      text width=2.65cm,minimum height=0.72cm,align=center,font=\scriptsize},
-    note/.style={rectangle,rounded corners,draw=stageorange,fill=orange!10,thick,
-      text width=2.65cm,minimum height=0.72cm,align=center,font=\tiny},
-    arrow/.style={-{Latex[length=2mm]},thick}
-  ]
-    \node[root] (root) at (0,0) {\pathcode{src/Accelerators/Gemmini/}\\Gemmini backend root};
+% 15b (simplified)
+\begin{frame}{How the Gemmini Backend Is Organized (overview)}
+  \small
+  \begin{columns}
+    \begin{column}{0.48\textwidth}
+      \textbf{Entry and Options}
+      \begin{itemize}
+        \item \code{Accelerator.cpp / InitAccelerators.cpp}: registers Gemmini.
+        \item \code{Compiler/}: maps CLI/build flags to a concrete pass pipeline.
+        \item Purpose: decide when Gemmini is enabled and which passes to run.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \textbf{Lowering and Transforms}
+      \begin{itemize}
+        \item \code{Conversion/}: ONNX → Gemmini → GemminiLow → LLVM.
+        \item \code{Transform/}: tiling, static scratchpad allocation, low-level rewrites.
+        \item \code{Dialect/}: Gemmini and GemminiLow op definitions (TableGen + C++ helpers).
+      \end{itemize}
+    \end{column}
+  \end{columns}
 
-    \node[file] (entry) at (-5.4,-1.35) {\code{Accelerator.*}\\backend entry point};
-    \node[file] (init) at (-2.7,-1.35) {\code{InitAccelerators.cpp}\\register accelerator};
-    \node[folder] (pass) at (0,-1.35) {\code{Pass/}\\pass declarations};
-    \node[folder] (compiler) at (2.7,-1.35) {\code{Compiler/}\\options + utilities};
-    \node[folder] (support) at (5.4,-1.35) {\code{Support/}\\target info};
+  \vspace{0.6em}
+  \textbf{Runtime and Support}
+  \begin{itemize}
+    \item \code{Runtime/}: C/C++ runtime helpers, OMTensor glue, and calls into \code{gemmini.h} (ABI macros).
+    \item \code{Support/}: hardware target parameters (\code{GemminiTargetInfo}) used by tiling and allocation.
+    \item These parts are the hardware boundary: runtime links into the ELF and emits RoCC/Gemmini instructions.
+  \end{itemize}
 
-    \node[folder] (dialect) at (-4.05,-3.05) {\code{Dialect/}\\Gemmini + GemminiLow ops};
-    \node[folder] (conversion) at (-1.35,-3.05) {\code{Conversion/}\\ONNX to Gemmini to LLVM};
-    \node[folder] (transform) at (1.35,-3.05) {\code{Transform/}\\tiling + allocation + rewrites};
-    \node[folder] (runtime) at (4.05,-3.05) {\code{Runtime/}\\C/C++ execution + ABI};
-
-    \node[note] (frontend) at (-4.05,-4.65) {defines the vocabulary\\used by conversions};
-    \node[note] (middle) at (-1.35,-4.65) {moves code between\\abstraction levels};
-    \node[note] (opt) at (1.35,-4.65) {changes shape/order\\for Gemmini hardware};
-    \node[note] (rtNote) at (4.05,-4.65) {linked into ELF and\\calls \code{gemmini.h}};
-
-    \foreach \x in {entry,init,pass,compiler,support,dialect,conversion,transform,runtime}
-      \draw[arrow] (root) -- (\x);
-    \draw[arrow] (dialect) -- (frontend);
-    \draw[arrow] (conversion) -- (middle);
-    \draw[arrow] (transform) -- (opt);
-    \draw[arrow] (runtime) -- (rtNote);
-  \end{tikzpicture}
-  \vfill
-  \begin{minipage}{0.94\textwidth}
-    {\tiny\color{codegray}
-    Read this map as responsibilities: registration and options at the top,
-    compiler IR vocabulary and lowering in the middle, and runtime/ABI code at the hardware boundary.}
-  \end{minipage}
+  \vspace{0.4em}
+  \scriptsize
+  Read as responsibilities: top-level registration & options → lowering & transform pipeline → runtime/ABI boundary.
 \end{frame}
 
 % 15c
@@ -3115,6 +3168,41 @@ resnet18_rv64:
   \end{itemize}
 \end{frame}
 
+% Static linking details slide
+\begin{frame}{Static Linking: Libraries and Approximate Sizes}
+  \scriptsize
+  \begin{itemize}
+    \item Typical link command for the ResNet-18 test (RISC-V toolchain):
+      \begin{lstlisting}[language=bash]
+g++ -static -o resnet18_rv64 \
+  float_model_runner.o \
+  resnet18.o \
+  libgemmini_f32_rv64.a \
+  libcruntime_rv64.a \
+  -lm
+      \end{lstlisting}
+    \item Key archives:
+      \begin{itemize}
+        \item \code{libgemmini_f32_rv64.a}: Gemmini runtime implementations (\code{OMRuntimeGemmini.o}).
+        \item \code{libcruntime_rv64.a}: ONNX-MLIR runtime helpers (\code{OMTensor}, utilities).
+        \item Test runner: provides \code{main()} and test harness objects.
+      \end{itemize}
+    \item Typical ELF section sizes (ResNet-18 example):
+      \begin{itemize}
+        \item \texttt{.text}: ~1.55 MB (CPU + runtime code)
+        \item \texttt{.rodata}: ~46.9 MB (model weights / constants)
+        \item \texttt{.data/.bss}: small (tens of KB)
+      \end{itemize}
+    \item What this means:
+      \begin{itemize}
+        \item Static linking pulls needed object code out of archives and places it into the final ELF.
+        \item Large read-only weights dominate binary size; consider compression, shared storage, or dynamic loading for deployment.
+        \item Link order matters: put the object files that reference library symbols before the archives that satisfy them.
+      \end{itemize}
+    \item See \pathcode{docs/gemmini/ONNX_to_RISCV_ResNet18_Gemmini_Pipeline.tex} for the full reproducible link commands and size reports.
+  \end{itemize}
+\end{frame}
+
 % 39
 \begin{frame}{How to Read the Disassembly}
   \begin{itemize}
@@ -3425,6 +3513,30 @@ resnet18_rv64:
   \pathcode{src/Accelerators/Gemmini/Runtime/gemmini-hardware-abi/rocc-software/src/xcustom.h}
 \end{frame}
 
+% .insn decoding step-by-step
+\begin{frame}{Decode a Gemmini \code{.insn} — Step by step}
+  \scriptsize
+  \begin{enumerate}
+    \item Start with disassembly line: e.g. \code{181be:  00e8b07b  .insn 4, 0x00e8b07b}
+    \item Low 7 bits (opcode) = \code{0x7b} → RISC-V \code{custom-3} space (Gemmini uses custom-3). Refer to \pathcode{src/Accelerators/Gemmini/Conversion/GemminiLowToLLVM/GemminiLowToLLVM.cpp} which emits \code{.insn r CUSTOM_3,...}.
+    \item Extract the Gemmini "funct" selector (the assembler inline-asm's third numeric argument). Common values used by the lowering:
+      \begin{itemize}
+        \item \code{0}: CONFIG (config/mode)
+        \item \code{2}: MVIN (data movement DRAM→spad)
+        \item \code{3}: MVOUT (spad/accum→DRAM)
+        \item \code{4}: COMPUTE_PRELOADED (matmul identity/compute)
+        \item \code{5}: COMPUTE_ACCUMULATED (matmul accumulate)
+        \item \code{6}: PRELOAD (stage accumulator)
+      \end{itemize}
+    \item The registers printed after ``.insn'' correspond to RISC-V register operands: \code{rd}, \code{rs1}, \code{rs2}. Gemmini packs command metadata into the 64-bit values placed in \code{rs1} and \code{rs2} by the compiler (see packing in \pathcode{src/Accelerators/Gemmini/Conversion/GemminiLowToLLVM/GemminiLowToLLVM.cpp}).
+    \item Example mapping (from lowering code): for MVIN (funct=2) the lowering first emits a CONFIG_MVIN with packed \code{rs1} containing \code{mvin_scale<<32 | 0x01} and \code{rs2}=row stride, then emits the MVIN with \code{rs1}=pointer and \code{rs2}=packed(tile_rows<<(32+16) | tile_cols<<32 | spad_offset_rows).
+    \item To decode a specific instruction from hex: use the linked object's disasm and the lowering patterns above to identify which funct and which packed layout apply, then extract fields like tile rows/cols/offset by reversing the bit packing (shift/mask operations).
+  \end{enumerate}
+
+  \vspace{0.4em}
+  {\tiny Tip: search for the inline-asm templates in \pathcode{src/Accelerators/Gemmini/Conversion/GemminiLowToLLVM/GemminiLowToLLVM.cpp} to see the exact packing and reproduce the bit-field extraction.}
+\end{frame}
+
 % 40i
 \begin{frame}[fragile]{Example: Gemmini Custom Instructions}
   \begin{lstlisting}
@@ -3541,6 +3653,38 @@ resnet18_rv64:
   \end{itemize}
 \end{frame}
 
+% --- Insert: ResNet-18 tiling and scratchpad slides ---
+\begin{frame}{Tiling Parameters for ResNet-18 (concrete)}
+  \scriptsize
+  \begin{itemize}
+    \item Gemmini hardware tile dimension: \code{DIM = GemminiTargetInfo::dim} (default in repo: 16). See \pathcode{src/Accelerators/Gemmini/Support/GemminiTargetInfo.hpp}.
+    \item ResNet-18 effective shapes: many Conv layers map to matrices that are tiled into 16×16 blocks by \code{GemminiTiling} (\pathcode{src/Accelerators/Gemmini/Transform/Gemmini/GemminiTiling.cpp}).
+    \item Tiling rules used in the pass:
+      \begin{itemize}
+        \item Loop over M, N, K in steps of \code{DIM} (tile rows/cols/depth).
+        \item Edge tiles are padded to full \code{DIM} shape (zero-fill) so downstream low-level lowering can assume full tiles.
+        \item K alternation uses two buffer slots (double-buffer pattern) to stream tiles into scratchpad; the pass toggles between buffer slots to avoid overwrite hazards.
+      \end{itemize}
+    \item Why \code{DIM=16}: matches Gemmini systolic mesh sizing and gives good utilization for common ResNet-18 channel counts (multiples or near-multiples of 16 like 64,128). Balances compute density vs scratchpad usage.
+    \item Practical implication: shapes whose M/N/K are small or not aligned to 16 may suffer padding overhead and might be better served by CPU fallback for lowest latency.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Scratchpad Allocation Strategy (static pass)}
+  \scriptsize
+  \begin{itemize}
+    \item Static allocation is performed by \code{StaticScratchpadAllocation.cpp} (\pathcode{src/Accelerators/Gemmini/Transform/GemminiLow/StaticScratchpadAllocation.cpp}).
+    \item Key policy points:
+      \begin{itemize}
+        \item Alternating A/B assignment: incoming A/B mvins are assigned alternating base row offsets (e.g. \code{nextSpadA}, \code{nextSpadB}) to avoid conflicts and simplify scheduling.
+        \item Accumulator groups: matmuls between fences form a group assigned a single accumulator row (\code{groupFirstAcc}).
+        \item Linear-scan allocator: the pass walks GemminiLow ops in program order, assigning concrete \code{spad_offset_rows} and \code{acc_offset_rows}; if allocation exceeds hardware limits (\code{scratchpadRows}, \code{accRows} in \code{GemminiTargetInfo}), the pass fails and lowering may fall back or require smaller tiles.
+        \item Conservatism: the static policy avoids global register coloring and instead uses deterministic alternating placement to produce reproducible addresses for LLVM lowering.
+      \end{itemize}
+    \item Watchouts: excessive concurrent tile live ranges or very large tile counts per group can exhaust scratchpad capacity; reduce \code{DIM} or split the work across more runtime calls.
+  \end{itemize}
+\end{frame}
+
 % 43
 \sectiondivider{Validation and Takeaways}{Use the artifact chain to debug, validate, and explain the pipeline.}
 
@@ -3582,13 +3726,60 @@ resnet18_rv64:
 
 \begin{frame}{Validation Checklist}
   \begin{itemize}
-    \item Check the MLIR files after each important pass.
-    \item Confirm runtime calls in \code{resnet18.ll}.
-    \item Confirm the final ELF is RV64 and statically linked as expected.
-    \item Confirm disassembly includes \code{om\_gemmini\_conv\_f32} calls.
-    \item Confirm Gemmini custom instructions appear as \code{.insn} in disassembly.
-    \item Compare Spike timing JSON outputs for Gemmini vs non-Gemmini.
+    \item Check the MLIR files after each important pass (ONNX, Krnl, LLVM).
+    \item Confirm runtime calls are present in LLVM IR and object files.
+    \item Confirm the final ELF is RV64, statically linked, and contains Gemmini runtime symbols.
+    \item Confirm disassembly contains Gemmini custom instructions (\code{.insn}).
+    \item Compare Spike timing JSON outputs for Gemmini vs non-Gemmini when running simulation.
   \end{itemize}
+
+  \vspace{0.5em}
+  \scriptsize
+  \begin{lstlisting}[language=bash]
+# 1. Generate model artifacts (example)
+$ONNX_MLIR --maccel=Gemmini --mtriple=riscv64-unknown-linux-gnu resnet18.onnx -o resnet18_rv64
+
+# 2. Build and link (example order matters)
+g++ -static -o resnet18_rv64 \
+  float_model_runner.o \
+  resnet18.o \
+  libgemmini_f32_rv64.a \
+  libcruntime_rv64.a \
+  -lm
+
+# 3. Inspect objects & archives
+riscv64-linux-gnu-nm -u resnet18.o | grep om_gemmini_conv_f32
+riscv64-linux-gnu-ar t libgemmini_f32_rv64.a
+
+# 4. Verify final ELF and sections
+file resnet18_rv64
+readelf -SW resnet18_rv64 | grep -E '\.text|\.rodata|\.data|\.bss'
+
+# 5. Find runtime calls and custom instructions in disassembly
+riscv64-linux-gnu-objdump -d resnet18_rv64 | grep -E '\.insn|om_gemmini_' -n -A2
+
+# 6. Trace any runtime symbol through the pipeline
+riscv64-linux-gnu-nm -u resnet18.o | grep "$SYM"
+riscv64-linux-gnu-nm -S libgemmini_f32_rv64.a | grep "$SYM"
+riscv64-linux-gnu-nm -S resnet18_rv64 | grep "$SYM"
+riscv64-linux-gnu-objdump -d resnet18_rv64 | grep -A4 "$SYM"
+  \end{lstlisting}
+\end{frame}
+
+\begin{frame}{ResNet-18 Benchmark Script (automation)}
+  \begin{itemize}
+    \item I added a runnable helper: \pathcode{docs/gemmini/run_resnet18_benchmark.sh}.
+    \item It automates: MLIR generation, optional RISC-V link, disassembly collection, and a Spike run if available.
+    \item Run it on a Linux host with `ONNX_MLIR`, RISC-V toolchain, and Spike configured.
+  \end{itemize}
+  \vspace{0.4em}
+  \scriptsize
+  \begin{lstlisting}[language=bash]
+chmod +x docs/gemmini/run_resnet18_benchmark.sh
+docs/gemmini/run_resnet18_benchmark.sh
+  \end{lstlisting}
+  \vspace{0.4em}
+  Outputs: artifact directory `docs/tests/15-resnet18-float/` with `.disasm`, `.nm`, `.sections`, and optional Spike logs.
 \end{frame}
 
 % 45
